@@ -10,9 +10,10 @@ import { registerPropiedadHandlers } from './db/handlers/propiedades'
 import { registerAbonoHandlers } from './db/handlers/abonos'
 
 function createWindow(): BrowserWindow {
+  const iconFile = process.platform === 'win32' ? 'icon.ico' : 'icon.png'
   const iconPath = is.dev
-    ? join(__dirname, '../../resources/icon.ico')
-    : join(process.resourcesPath, 'resources/icon.ico')
+    ? join(__dirname, '../../resources', iconFile)
+    : join(process.resourcesPath, 'resources', iconFile)
 
   const win = new BrowserWindow({
     width: 1280,

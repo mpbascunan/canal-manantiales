@@ -10,6 +10,10 @@ import { registerPropiedadHandlers } from './db/handlers/propiedades'
 import { registerAbonoHandlers } from './db/handlers/abonos'
 
 function createWindow(): BrowserWindow {
+  const iconPath = is.dev
+    ? join(__dirname, '../../resources/icon.ico')
+    : join(process.resourcesPath, 'resources/icon.ico')
+
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -17,6 +21,7 @@ function createWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
+    icon: iconPath,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

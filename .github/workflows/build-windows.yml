@@ -1,0 +1,44 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build installer
+        run: npm run dist
+
+      - name: Get app version
+        id: version
+        shell: bash
+        run: echo "value=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.value }}
+          name: Canal Contabilidad v${{ steps.version.outputs.value }}
+          body: |
+            ## Canal Contabilidad v${{ steps.version.outputs.value }}
+
+            **Para instalar:** descarga el archivo `.exe` y ejecútalo.
+            La base de datos con todos los datos **no se ve afectada** al actualizar.
+          files: release/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

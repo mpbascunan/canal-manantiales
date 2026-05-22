@@ -9,6 +9,7 @@ import ResumenContable from './pages/ResumenContable'
 import Deudores from './pages/Deudores'
 import Temporadas from './pages/Temporadas'
 import ImportarExcel from './pages/ImportarExcel'
+import Cargos from './pages/Cargos'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="resumen" element={<ResumenContable />} />
           <Route path="deudores" element={<Deudores />} />
           <Route path="temporadas" element={<Temporadas />} />
+          <Route path="cargos" element={<Cargos />} />
           <Route path="importar" element={<ImportarExcel />} />
         </Route>
       </Routes>

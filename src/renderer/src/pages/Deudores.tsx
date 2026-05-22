@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/ipc'
-import { calcularMontoAcciones, calcularMultas, calcularTotal, formatCLP } from '../lib/formulas'
+import { calcularDeuda, calcularMultaVencimiento, tieneMultaVencimiento, formatCLP } from '../lib/formulas'
 import { exportDeudores } from '../lib/export'
 import type { Temporada, AccionistaType } from '../../../shared/types'
 
@@ -16,6 +16,7 @@ interface DeudorRow {
   cuota_extraordinaria: number
   otros_ingresos: number
   total_abonado: number
+  total_cargos: number
 }
 
 const TIPO_LABELS: Record<AccionistaType, string> = {
@@ -49,16 +50,30 @@ export default function Deudores() {
     )
   }, [rows, search, filterTipo])
 
+  const hayMultaVenc = temporada ? tieneMultaVencimiento(temporada) : false
+
   const computedRows = useMemo(() => {
     if (!temporada) return []
     return filtered.map(r => {
-      const monto  = calcularMontoAcciones(temporada.valor_accion, r.acciones, r.hectareas, r.temporadas_adeudadas)
-      const multas = calcularMultas(r.acciones, r.hectareas, r.temporadas_adeudadas)
-      const total  = calcularTotal(monto, multas, r.cuota_extraordinaria, r.otros_ingresos)
-      const restante = Math.max(0, total - r.total_abonado)
-      return { ...r, monto_adeudado: monto, multas, total, restante }
-    }).filter(r => r.restante > 0)   // hide fully covered rows
-  }, [filtered, temporada])
+      const multaVencimiento = hayMultaVenc
+        ? calcularMultaVencimiento(r.acciones, r.hectareas, temporada.monto_multa_por_accion, temporada.valor_accion, r.total_abonado)
+        : 0
+      const d = calcularDeuda({
+        valorAccion:         temporada.valor_accion,
+        acciones:            r.acciones,
+        hectareas:           r.hectareas,
+        temporadasAdeudadas: r.temporadas_adeudadas,
+        cuotaExtraordinaria: r.cuota_extraordinaria,
+        otrosIngresos:       r.otros_ingresos,
+        totalAbonado:        r.total_abonado,
+        totalCargos:         r.total_cargos ?? 0,
+        totalCargosPagados:  0,
+        montoPorAccion:      temporada.monto_multa_por_accion,
+        multaVencimiento
+      })
+      return { ...r, monto_adeudado: d.monto_acciones, multas: d.multas, total: d.total, restante: d.pendiente }
+    }).filter(r => r.restante > 0)
+  }, [filtered, temporada, hayMultaVenc])
 
   const grandTotal = computedRows.reduce((s, r) => s + r.restante, 0)
 
@@ -142,7 +157,12 @@ export default function Deudores() {
                       title={saving === r.id ? 'Guardando…' : ''}
                     />
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">{formatCLP(r.total)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">
+                    <div>{formatCLP(r.total)}</div>
+                    {(r.total_cargos ?? 0) > 0 && (
+                      <div className="text-xs text-indigo-500">inc. {formatCLP(r.total_cargos)} cargos</div>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {r.total_abonado > 0
                       ? <span className="text-canal-600">{formatCLP(r.total_abonado)}</span>
@@ -157,7 +177,7 @@ export default function Deudores() {
                       <button
                         className="btn-secondary btn-sm text-xs"
                         onClick={() => navigate(`/pagos/nuevo?accionista=${r.id}&mode=abono`)}
-                        title="Registrar abono parcial"
+                        title="Registrar abono"
                       >
                         Abonar
                       </button>

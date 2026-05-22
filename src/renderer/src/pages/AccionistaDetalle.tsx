@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../lib/ipc'
 import {
-  calcularMontoAcciones, calcularMultas, calcularTotal,
+  calcularDeuda, calcularMultaVencimiento, tieneMultaVencimiento,
   formatCLP, formatFecha, formatNumber
 } from '../lib/formulas'
 import { exportAvisosCobro } from '../lib/export'
-import type { Accionista, Pago, Temporada, Propiedad, Abono } from '../../../shared/types'
+import type { Accionista, Pago, Temporada, Propiedad, Abono, Cargo } from '../../../shared/types'
+import { nombreCompleto } from '../../../shared/types'
 
 const TIPO_LABELS: Record<string, string> = {
   PARCELA: 'Parcela', SITIO: 'Sitio', 'PEQUEÑO_PROPIETARIO': 'Pequeño Propietario'
@@ -21,6 +22,8 @@ interface DeudorConfig {
   cuota_extraordinaria: number
   otros_ingresos: number
   total_abonado: number
+  total_cargos: number
+  total_cargos_pagados: number
 }
 
 export default function AccionistaDetalle() {
@@ -32,6 +35,7 @@ export default function AccionistaDetalle() {
   const [propiedades, setPropiedades] = useState<Propiedad[]>([])
   const [temporada, setTemporada] = useState<Temporada | null>(null)
   const [deudorConfig, setDeudorConfig] = useState<DeudorConfig | null>(null)
+  const [cargos, setCargos] = useState<(Cargo & { monto: number; pagado: number })[]>([])
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [deleting, setDeleting] = useState(false)
 
@@ -49,9 +53,10 @@ export default function AccionistaDetalle() {
       setAbonos(abs)
       setPropiedades(props)
       setTemporada(t)
-      // Load debt config for the active temporada
+      // Load debt config and cargos for the active temporada
       if (t) {
         api.deudores.getConfig(aid, t.id).then(setDeudorConfig)
+        api.cargos.listByAccionista(aid, t.id).then(setCargos)
       }
     })
   }
@@ -84,20 +89,35 @@ export default function AccionistaDetalle() {
     ? pagos.some(p => p.temporada_id === temporada.id)
     : false
 
-  const debtTotal = (temporada && accionista && deudorConfig)
-    ? calcularTotal(
-        calcularMontoAcciones(temporada.valor_accion, accionista.acciones, accionista.hectareas, deudorConfig.temporadas_adeudadas),
-        calcularMultas(accionista.acciones, accionista.hectareas, deudorConfig.temporadas_adeudadas),
-        deudorConfig.cuota_extraordinaria,
-        deudorConfig.otros_ingresos
-      )
+  const totalCargos        = cargos.reduce((s, c) => s + c.monto, 0)
+  const totalCargosPagados = cargos.filter(c => c.pagado).reduce((s, c) => s + c.monto, 0)
+
+  const multaVencimiento = (temporada && accionista && deudorConfig && tieneMultaVencimiento(temporada))
+    ? calcularMultaVencimiento(accionista.acciones, accionista.hectareas, temporada.monto_multa_por_accion, temporada.valor_accion, deudorConfig.total_abonado)
     : 0
 
-  const debtPendiente = Math.max(0, debtTotal - (deudorConfig?.total_abonado ?? 0))
+  const deuda = (temporada && accionista && deudorConfig)
+    ? calcularDeuda({
+        valorAccion:          temporada.valor_accion,
+        acciones:             accionista.acciones,
+        hectareas:            accionista.hectareas,
+        temporadasAdeudadas:  deudorConfig.temporadas_adeudadas,
+        cuotaExtraordinaria:  deudorConfig.cuota_extraordinaria,
+        otrosIngresos:        deudorConfig.otros_ingresos,
+        totalAbonado:         deudorConfig.total_abonado,
+        totalCargos,
+        totalCargosPagados,
+        montoPorAccion:       temporada.monto_multa_por_accion,
+        multaVencimiento
+      })
+    : null
+
+  const debtTotal     = deuda?.total ?? 0
+  const debtPendiente = deuda?.pendiente ?? 0
 
   const handlePrintAviso = () => {
     if (!temporada) return
-    exportAvisosCobro([accionista], temporada, temporada.valor_accion)
+    exportAvisosCobro([accionista], temporada, temporada.valor_accion, multaVencimiento, propiedades)
   }
 
   return (
@@ -117,7 +137,10 @@ export default function AccionistaDetalle() {
               <span className="text-gray-400 text-sm">N° {accionista.numeros}</span>
             )}
           </div>
-          <h1 className="text-xl font-bold text-gray-900">{accionista.nombre}</h1>
+          <h1 className="text-xl font-bold text-gray-900">{nombreCompleto(accionista)}</h1>
+          {accionista.numero_socio && (
+            <p className="text-xs text-gray-400 mt-0.5">N° socio: {accionista.numero_socio}</p>
+          )}
           <div className="flex gap-6 mt-3 text-sm text-gray-600">
             {accionista.acciones > 0 && (
               <div><span className="text-gray-400">Acciones totales: </span>
@@ -171,6 +194,11 @@ export default function AccionistaDetalle() {
               <div className="text-xs text-gray-400">
                 {deudorConfig.temporadas_adeudadas} temporada{deudorConfig.temporadas_adeudadas !== 1 ? 's' : ''} adeudada{deudorConfig.temporadas_adeudadas !== 1 ? 's' : ''}
               </div>
+              {multaVencimiento > 0 && temporada?.fecha_multa && (
+                <div className="text-xs text-orange-600 mt-0.5">
+                  Incluye multa por vencimiento ({formatCLP(multaVencimiento)}) · límite {formatFecha(temporada.fecha_multa)}
+                </div>
+              )}
             </div>
           ) : (
             <span className="text-gray-400 text-sm">Sin deuda registrada</span>
@@ -179,7 +207,7 @@ export default function AccionistaDetalle() {
       )}
 
       {/* Propiedades breakdown */}
-      {propiedades.length > 1 && (
+      {propiedades.length > 0 && (
         <div className="card overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100">
             <h2 className="font-semibold text-sm text-gray-700">Propiedades ({propiedades.length})</h2>
@@ -189,6 +217,10 @@ export default function AccionistaDetalle() {
               <tr className="table-header">
                 <th className="px-4 py-2 text-left">N°</th>
                 <th className="px-4 py-2 text-left">Tipo</th>
+                <th className="px-4 py-2 text-left">Dirección</th>
+                <th className="px-4 py-2 text-left">Sector</th>
+                <th className="px-4 py-2 text-left">Comuna</th>
+                <th className="px-4 py-2 text-left">Marco</th>
                 <th className="px-4 py-2 text-right">Acciones</th>
                 <th className="px-4 py-2 text-right">Hectáreas</th>
               </tr>
@@ -198,6 +230,10 @@ export default function AccionistaDetalle() {
                 <tr key={p.id} className="table-row">
                   <td className="px-4 py-2 text-gray-500">{p.numero ?? '—'}</td>
                   <td className="px-4 py-2">{TIPO_LABELS[p.tipo]}</td>
+                  <td className="px-4 py-2 text-gray-600">{p.direccion ?? '—'}</td>
+                  <td className="px-4 py-2 text-gray-600">{p.sector ?? '—'}</td>
+                  <td className="px-4 py-2 text-gray-600">{p.comuna ?? '—'}</td>
+                  <td className="px-4 py-2 text-gray-600">{p.marco ?? '—'}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{p.acciones > 0 ? formatNumber(p.acciones) : '—'}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{p.hectareas > 0 ? formatNumber(p.hectareas) : '—'}</td>
                 </tr>
@@ -274,7 +310,7 @@ export default function AccionistaDetalle() {
       {abonos.length > 0 && (
         <div className="card overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100">
-            <h2 className="font-semibold text-sm text-gray-700">Abonos parciales</h2>
+            <h2 className="font-semibold text-sm text-gray-700">Abonos</h2>
           </div>
           <table className="w-full text-sm">
             <thead>
@@ -302,6 +338,42 @@ export default function AccionistaDetalle() {
                     >
                       Eliminar
                     </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Cargos table */}
+      {cargos.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h2 className="font-semibold text-sm text-gray-700">Cargos temporada activa</h2>
+            <span className="text-xs text-gray-400">
+              Total: {formatCLP(cargos.reduce((s, c) => s + c.monto, 0))}
+            </span>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="table-header">
+                <th className="px-4 py-2 text-left">Nombre</th>
+                <th className="px-4 py-2 text-left">Fecha</th>
+                <th className="px-4 py-2 text-right">Monto</th>
+                <th className="px-4 py-2 text-center">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cargos.map(c => (
+                <tr key={c.id} className="table-row">
+                  <td className="px-4 py-2">{c.nombre}</td>
+                  <td className="px-4 py-2 text-gray-500">{formatFecha(c.fecha)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{formatCLP(c.monto)}</td>
+                  <td className="px-4 py-2 text-center">
+                    {c.pagado
+                      ? <span className="text-green-600 text-xs font-medium">Pagado</span>
+                      : <span className="text-amber-600 text-xs font-medium">Pendiente</span>}
                   </td>
                 </tr>
               ))}

@@ -2,11 +2,13 @@ import { useEffect, useState, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/ipc'
 import {
-  calcularMontoAcciones, calcularMultas, calcularTotal,
+  calcularMontoAcciones, calcularMultas, calcularMultaVencimiento,
+  tieneMultaVencimiento, calcularTotal, calcularDeuda,
   formatCLP, toISODate
 } from '../lib/formulas'
 import { exportComprobanteAbono } from '../lib/export'
 import type { Accionista, Temporada } from '../../../shared/types'
+import { nombreCompleto } from '../../../shared/types'
 
 type Mode = 'completo' | 'abono'
 
@@ -15,6 +17,8 @@ interface DeudorConfig {
   cuota_extraordinaria: number
   otros_ingresos: number
   total_abonado: number
+  total_cargos: number
+  total_cargos_pagados: number
 }
 
 export default function NuevoPago() {
@@ -28,7 +32,6 @@ export default function NuevoPago() {
   const [temporadas, setTemporadas] = useState<Temporada[]>([])
   const [accionistas, setAccionistas] = useState<Accionista[]>([])
   const [selectedAcc, setSelectedAcc] = useState<Accionista | null>(null)
-  const [nextNum, setNextNum] = useState(0)
   const [search, setSearch] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
 
@@ -61,7 +64,9 @@ export default function NuevoPago() {
     temporadas_adeudadas: 1,
     cuota_extraordinaria: 0,
     otros_ingresos: 0,
-    total_abonado: 0
+    total_abonado: 0,
+    total_cargos: 0,
+    total_cargos_pagados: 0
   })
   const [printComprobante, setPrintComprobante] = useState(false)
   // Duplicate payment guard: pago already exists for this accionista + temporada
@@ -75,44 +80,51 @@ export default function NuevoPago() {
   useEffect(() => {
     Promise.all([
       api.temporadas.list(),
-      api.accionistas.list(),
-      api.pagos.nextNumeroIngreso()
-    ]).then(([ts, as, num]) => {
+      api.accionistas.list()
+    ]).then(([ts, as]) => {
       setTemporadas(ts)
       setAccionistas(as)
-      setNextNum(num)
       const active = ts.find((t: Temporada) => t.activa)
       if (active) setForm(f => ({ ...f, temporada_id: active.id }))
-      setForm(f => ({ ...f, numero_ingreso: num }))
-      setAbonoForm(f => ({ ...f, numero_ingreso: num }))
       if (preselectedId) {
         const a = as.find((x: Accionista) => x.id === preselectedId)
-        if (a) selectAccionistaWith(a, ts.find((x: Temporada) => x.activa) ?? null, num)
+        if (a) selectAccionistaWith(a, ts.find((x: Temporada) => x.activa) ?? null)
       }
     })
   }, [])
 
   // Compute total debt the accionista owes (using deudorConfig values)
   const totalOweComputed = (acc: Accionista | null, t: Temporada | null, cfg: DeudorConfig) => {
-    if (!acc || !t) return 0
-    const monto = calcularMontoAcciones(t.valor_accion, acc.acciones, acc.hectareas, cfg.temporadas_adeudadas)
-    const multas = calcularMultas(acc.acciones, acc.hectareas, cfg.temporadas_adeudadas)
-    return calcularTotal(monto, multas, cfg.cuota_extraordinaria, cfg.otros_ingresos)
+    if (!acc || !t) return calcularDeuda({ valorAccion: 0, acciones: 0, hectareas: 0, temporadasAdeudadas: 1, cuotaExtraordinaria: 0, otrosIngresos: 0, totalAbonado: 0, totalCargos: 0, totalCargosPagados: 0, montoPorAccion: 0, multaVencimiento: 0 })
+    const multaVenc = tieneMultaVencimiento(t)
+      ? calcularMultaVencimiento(acc.acciones, acc.hectareas, t.monto_multa_por_accion, t.valor_accion, cfg.total_abonado)
+      : 0
+    return calcularDeuda({
+      valorAccion:         t.valor_accion,
+      acciones:            acc.acciones,
+      hectareas:           acc.hectareas,
+      temporadasAdeudadas: cfg.temporadas_adeudadas,
+      cuotaExtraordinaria: cfg.cuota_extraordinaria,
+      otrosIngresos:       cfg.otros_ingresos,
+      totalAbonado:        cfg.total_abonado,
+      totalCargos:         cfg.total_cargos,
+      totalCargosPagados:  cfg.total_cargos_pagados,
+      montoPorAccion:      t.monto_multa_por_accion,
+      multaVencimiento:    multaVenc
+    })
   }
 
-  const selectAccionistaWith = (a: Accionista, t: Temporada | null, numIngreso: number) => {
+  const selectAccionistaWith = (a: Accionista, t: Temporada | null) => {
     setSelectedAcc(a)
-    setSearch(a.nombre)
+    setSearch(nombreCompleto(a))
     setShowDropdown(false)
     setExistingPago(null)
     setForm(f => ({
       ...f,
       acciones_override: a.acciones,
       hectareas_override: a.hectareas,
-      monto_acciones: t ? calcularMontoAcciones(t.valor_accion, a.acciones, a.hectareas, f.temporadas_pagadas) : f.monto_acciones,
-      numero_ingreso: numIngreso || f.numero_ingreso
+      monto_acciones: t ? calcularMontoAcciones(t.valor_accion, a.acciones, a.hectareas, f.temporadas_pagadas) : f.monto_acciones
     }))
-    setAbonoForm(f => ({ ...f, numero_ingreso: numIngreso || f.numero_ingreso }))
 
     if (t) {
       // Check for duplicate full payment
@@ -124,22 +136,27 @@ export default function NuevoPago() {
       // Load deudor config (includes total_abonado)
       api.deudores.getConfig(a.id, t.id).then((cfg: DeudorConfig) => {
         setDeudorConfig(cfg)
-        // Pre-fill full payment temporadas
         const adeudadas = cfg.temporadas_adeudadas ?? 1
+        // Pre-fill multas: previous seasons multa + vencimiento multa if applicable
+        const multaPrevias = calcularMultas(a.acciones, a.hectareas, adeudadas, t.monto_multa_por_accion)
+        const multaVenc = tieneMultaVencimiento(t)
+          ? calcularMultaVencimiento(a.acciones, a.hectareas, t.monto_multa_por_accion, t.valor_accion, cfg.total_abonado)
+          : 0
+        const totalMultas = multaPrevias + multaVenc
         setForm(prev => {
-          const newMonto = t ? calcularMontoAcciones(t.valor_accion, a.acciones, a.hectareas, adeudadas) : prev.monto_acciones
-          return { ...prev, temporadas_pagadas: adeudadas, monto_acciones: newMonto }
+          const newMonto = calcularMontoAcciones(t.valor_accion, a.acciones, a.hectareas, adeudadas)
+          return { ...prev, temporadas_pagadas: adeudadas, monto_acciones: newMonto, multas: totalMultas }
         })
         // Pre-fill abono with remaining balance
-        const totalOwed = totalOweComputed(a, t, cfg)
-        const remaining = Math.max(0, totalOwed - cfg.total_abonado)
+        const deuda = totalOweComputed(a, t, cfg)
+        const remaining = deuda.pendiente
         setAbonoForm(prev => ({ ...prev, monto: remaining }))
       })
     }
   }
 
   const selectAccionista = (a: Accionista) => {
-    selectAccionistaWith(a, activeTemporada ?? null, nextNum)
+    selectAccionistaWith(a, activeTemporada ?? null)
   }
 
   // Full payment recalc
@@ -154,23 +171,20 @@ export default function NuevoPago() {
     setForm(f => ({ ...f, monto_acciones: monto }))
   }, [activeTemporada, form.acciones_override, form.hectareas_override, form.temporadas_pagadas])
 
-  const autoMultas = () => {
-    if (!selectedAcc) return
-    const m = calcularMultas(form.acciones_override, form.hectareas_override, form.temporadas_pagadas)
-    setForm(f => ({ ...f, multas: m }))
-  }
-
   const total = calcularTotal(form.monto_acciones, form.multas, form.cuota_extraordinaria, form.otros_ingresos)
   const abonoTotal = calcularTotal(abonoForm.monto, abonoForm.multas, abonoForm.cuota_extraordinaria, abonoForm.otros_ingresos)
 
   // Debt summary values
-  const totalOwed   = totalOweComputed(selectedAcc, activeTemporada ?? null, deudorConfig)
-  const yaAbonado   = deudorConfig.total_abonado
-  const pendiente   = Math.max(0, totalOwed - yaAbonado)
+  const deudaBreakdown = totalOweComputed(selectedAcc, activeTemporada ?? null, deudorConfig)
+  const yaAbonado    = deudorConfig.total_abonado
+  const pendiente    = deudaBreakdown.pendiente
   const restanteTras = Math.max(0, pendiente - abonoTotal)
 
+  // For full payment: net amount to collect = pending balance (already includes cargos)
+  const totalCompleto = deudaBreakdown.pendiente
+
   const filteredAcc = accionistas.filter(a =>
-    a.nombre.toLowerCase().includes(search.toLowerCase())
+    nombreCompleto(a).toLowerCase().includes(search.toLowerCase())
   ).slice(0, 8)
 
   // ── Save handlers ────────────────────────────────────────────────────────────
@@ -188,7 +202,7 @@ export default function NuevoPago() {
       multas: form.multas,
       cuota_extraordinaria: form.cuota_extraordinaria,
       otros_ingresos: form.otros_ingresos,
-      total,
+      total: totalCompleto,
       notas: form.notas || null
     })
     setSaved(true)
@@ -261,7 +275,7 @@ export default function NuevoPago() {
             }`}
             onClick={() => setMode('abono')}
           >
-            Abono parcial
+            Abono
           </button>
         </div>
       </div>
@@ -285,7 +299,7 @@ export default function NuevoPago() {
                   className="w-full text-left px-3 py-2 text-sm hover:bg-canal-50"
                   onMouseDown={() => selectAccionista(a)}
                 >
-                  <div className="font-medium">{a.nombre}</div>
+                  <div className="font-medium">{nombreCompleto(a)}</div>
                   <div className="text-xs text-gray-400">
                     {a.numeros ? `N° ${a.numeros}` : a.numero ? `N° ${a.numero}` : ''}
                     {a.acciones > 0 ? ` · ${a.acciones} acc.` : ''}
@@ -323,7 +337,7 @@ export default function NuevoPago() {
                   Deuda actual: <strong>{deudorConfig.temporadas_adeudadas} temporada{deudorConfig.temporadas_adeudadas !== 1 ? 's' : ''} adeudada{deudorConfig.temporadas_adeudadas !== 1 ? 's' : ''}</strong>
                   {activeTemporada && (
                     <span className="ml-2 text-amber-700">
-                      ≈ {formatCLP(totalOwed)}
+                      ≈ {formatCLP(deudaBreakdown.total)}
                     </span>
                   )}
                 </div>
@@ -358,7 +372,10 @@ export default function NuevoPago() {
               </div>
               <div>
                 <label className="label">N° Ingreso</label>
-                <input type="number" className="input" value={form.numero_ingreso} onChange={e => setForm(f => ({ ...f, numero_ingreso: Number(e.target.value) }))} />
+                <input type="number" className="input"
+                  value={form.numero_ingreso === 0 ? '' : form.numero_ingreso}
+                  placeholder="0"
+                  onChange={e => setForm(f => ({ ...f, numero_ingreso: e.target.value === '' ? 0 : Number(e.target.value) }))} />
               </div>
               <div>
                 <label className="label">N° Temporadas a pagar</label>
@@ -388,8 +405,10 @@ export default function NuevoPago() {
                 <label className="label mb-0">Monto Cancelado por Acciones</label>
                 <button className="text-xs text-canal-600 hover:underline" onClick={recalcMonto}>Recalcular</button>
               </div>
-              <input type="number" className="input bg-white font-semibold text-canal-900" value={form.monto_acciones}
-                onChange={e => setForm(f => ({ ...f, monto_acciones: Number(e.target.value) }))} />
+              <input type="number" className="input bg-white font-semibold text-canal-900"
+                value={form.monto_acciones === 0 ? '' : form.monto_acciones}
+                placeholder="0"
+                onChange={e => setForm(f => ({ ...f, monto_acciones: e.target.value === '' ? 0 : Number(e.target.value) }))} />
               {activeTemporada && (
                 <p className="text-xs text-canal-500">
                   ({formatCLP(activeTemporada.valor_accion)} × ({form.acciones_override} acc + {form.hectareas_override} ha) × {form.temporadas_pagadas} temp.)
@@ -399,19 +418,22 @@ export default function NuevoPago() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="label mb-0">Multas</label>
-                  <button className="text-xs text-orange-600 hover:underline" onClick={autoMultas}>Auto-calcular</button>
-                </div>
-                <input type="number" className="input" value={form.multas} onChange={e => setForm(f => ({ ...f, multas: Number(e.target.value) }))} />
+                <label className="label">Multas</label>
+                <input type="number" className="input"
+                  value={form.multas === 0 ? '' : form.multas} placeholder="0"
+                  onChange={e => setForm(f => ({ ...f, multas: e.target.value === '' ? 0 : Number(e.target.value) }))} />
               </div>
               <div>
                 <label className="label">Cuota Extraordinaria</label>
-                <input type="number" className="input" value={form.cuota_extraordinaria} onChange={e => setForm(f => ({ ...f, cuota_extraordinaria: Number(e.target.value) }))} />
+                <input type="number" className="input"
+                  value={form.cuota_extraordinaria === 0 ? '' : form.cuota_extraordinaria} placeholder="0"
+                  onChange={e => setForm(f => ({ ...f, cuota_extraordinaria: e.target.value === '' ? 0 : Number(e.target.value) }))} />
               </div>
               <div>
                 <label className="label">Otros Ingresos</label>
-                <input type="number" className="input" value={form.otros_ingresos} onChange={e => setForm(f => ({ ...f, otros_ingresos: Number(e.target.value) }))} />
+                <input type="number" className="input"
+                  value={form.otros_ingresos === 0 ? '' : form.otros_ingresos} placeholder="0"
+                  onChange={e => setForm(f => ({ ...f, otros_ingresos: e.target.value === '' ? 0 : Number(e.target.value) }))} />
               </div>
             </div>
             <div>
@@ -419,9 +441,30 @@ export default function NuevoPago() {
               <input className="input" value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))} />
             </div>
 
+            {(deudorConfig.total_cargos > 0 || yaAbonado > 0) && (
+              <div className="rounded-md bg-sky-50 border border-sky-200 px-4 py-2.5 text-sm text-sky-800 space-y-1">
+                <div className="flex justify-between">
+                  <span>Subtotal por acciones/multas:</span>
+                  <span className="tabular-nums">{formatCLP(total)}</span>
+                </div>
+                {deudorConfig.total_cargos > 0 && (
+                  <div className="flex justify-between text-indigo-700">
+                    <span>Cargos adicionales:</span>
+                    <span className="tabular-nums">+ {formatCLP(deudorConfig.total_cargos)}</span>
+                  </div>
+                )}
+                {yaAbonado > 0 && (
+                  <div className="flex justify-between text-sky-700">
+                    <span>Abonos previos descontados:</span>
+                    <span className="tabular-nums">− {formatCLP(yaAbonado)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="bg-gray-900 rounded-lg p-4 flex items-center justify-between">
-              <span className="text-gray-300 font-medium">TOTAL</span>
-              <span className="text-white text-2xl font-bold tabular-nums">{formatCLP(total)}</span>
+              <span className="text-gray-300 font-medium">TOTAL A PAGAR</span>
+              <span className="text-white text-2xl font-bold tabular-nums">{formatCLP(totalCompleto)}</span>
             </div>
 
             <div className="flex gap-3 justify-end">
@@ -464,11 +507,11 @@ export default function NuevoPago() {
                 <div className="grid grid-cols-3 gap-2 text-sm">
                   <div className="text-center">
                     <div className="text-xs text-gray-500 mb-0.5">Total adeudado</div>
-                    <div className="font-semibold text-gray-800 tabular-nums">{formatCLP(totalOwed)}</div>
+                    <div className="font-semibold text-gray-800 tabular-nums">{formatCLP(deudaBreakdown.total)}</div>
                     <div className="text-xs text-gray-400">{deudorConfig.temporadas_adeudadas} temp.</div>
                   </div>
                   <div className="text-center border-x border-amber-200">
-                    <div className="text-xs text-gray-500 mb-0.5">Ya abonado</div>
+                    <div className="text-xs text-gray-500 mb-0.5">Abonado</div>
                     <div className="font-semibold text-canal-700 tabular-nums">{formatCLP(yaAbonado)}</div>
                   </div>
                   <div className="text-center">
@@ -493,8 +536,10 @@ export default function NuevoPago() {
               </div>
               <div>
                 <label className="label">N° Ingreso</label>
-                <input type="number" className="input" value={abonoForm.numero_ingreso}
-                  onChange={e => setAbonoForm(f => ({ ...f, numero_ingreso: Number(e.target.value) }))} />
+                <input type="number" className="input"
+                  value={abonoForm.numero_ingreso === 0 ? '' : abonoForm.numero_ingreso}
+                  placeholder="0"
+                  onChange={e => setAbonoForm(f => ({ ...f, numero_ingreso: e.target.value === '' ? 0 : Number(e.target.value) }))} />
               </div>
             </div>
 
@@ -603,7 +648,7 @@ export default function NuevoPago() {
               {mode === 'completo' ? 'Confirmar pago' : 'Confirmar abono'}
             </h2>
             <div className="space-y-1 text-sm text-gray-600">
-              <div className="flex justify-between"><span>Accionista:</span><span className="font-medium">{selectedAcc.nombre}</span></div>
+              <div className="flex justify-between"><span>Accionista:</span><span className="font-medium">{nombreCompleto(selectedAcc)}</span></div>
               {mode === 'completo' ? (
                 <>
                   <div className="flex justify-between"><span>Temporadas:</span><span>{form.temporadas_pagadas}</span></div>
@@ -611,7 +656,9 @@ export default function NuevoPago() {
                   {form.multas > 0 && <div className="flex justify-between"><span>Multas:</span><span>{formatCLP(form.multas)}</span></div>}
                   {form.cuota_extraordinaria > 0 && <div className="flex justify-between"><span>Cuota extra:</span><span>{formatCLP(form.cuota_extraordinaria)}</span></div>}
                   {form.otros_ingresos > 0 && <div className="flex justify-between"><span>Otros:</span><span>{formatCLP(form.otros_ingresos)}</span></div>}
-                  <div className="flex justify-between border-t pt-1 font-bold text-gray-900"><span>TOTAL:</span><span>{formatCLP(total)}</span></div>
+                  {deudorConfig.total_cargos > 0 && <div className="flex justify-between text-indigo-700"><span>Cargos adicionales:</span><span>+ {formatCLP(deudorConfig.total_cargos)}</span></div>}
+                  {yaAbonado > 0 && <div className="flex justify-between text-sky-700"><span>Abonos previos:</span><span>− {formatCLP(yaAbonado)}</span></div>}
+                  <div className="flex justify-between border-t pt-1 font-bold text-gray-900"><span>TOTAL A PAGAR:</span><span>{formatCLP(totalCompleto)}</span></div>
                 </>
               ) : (
                 <>

@@ -20,9 +20,9 @@ const PROPS_AGG = `
 `
 
 const ACCIONISTA_COLS = `
-  a.id, a.nombre, a.activo, a.notas,
-  COALESCE(pt.total_acciones, a.acciones)   AS acciones,
-  COALESCE(pt.total_hectareas, a.hectareas) AS hectareas,
+  a.id, a.nombre, a.apellido_paterno, a.apellido_materno, a.numero_socio, a.activo, a.notas,
+  COALESCE(pt.total_acciones, 0)   AS acciones,
+  COALESCE(pt.total_hectareas, 0) AS hectareas,
   COALESCE(pf.tipo, a.tipo)                 AS tipo,
   COALESCE(pf.numero, a.numero)             AS numero,
   COALESCE(pt.numeros, a.numero)            AS numeros
@@ -52,24 +52,25 @@ export function registerAccionistaHandlers(): void {
     const id = db.transaction(() => {
       const r = db
         .prepare(
-          `INSERT INTO accionistas (nombre, tipo, numero, acciones, hectareas, activo, notas)
-           VALUES (@nombre, @tipo, @numero, @acciones, @hectareas, @activo, @notas)`
+          `INSERT INTO accionistas (nombre, apellido_paterno, apellido_materno, numero_socio, tipo, numero, activo, notas)
+           VALUES (@nombre, @apellido_paterno, @apellido_materno, @numero_socio, @tipo, @numero, @activo, @notas)`
         )
         .run({
           nombre: input.nombre,
+          apellido_paterno: input.apellido_paterno ?? null,
+          apellido_materno: input.apellido_materno ?? null,
+          numero_socio: input.numero_socio ?? null,
           tipo: primary?.tipo ?? 'PARCELA',
           numero: primary?.numero ?? null,
-          acciones: 0,
-          hectareas: 0,
           activo: input.activo ? 1 : 0,
           notas: input.notas ?? null
         })
       const newId = r.lastInsertRowid as number
       for (const p of props) {
         db.prepare(
-          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas)
-           VALUES (?, ?, ?, ?, ?)`
-        ).run(newId, p.numero ?? null, p.tipo, p.acciones, p.hectareas)
+          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas, direccion, sector, comuna, marco)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(newId, p.numero ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.sector ?? null, p.comuna ?? null, p.marco ?? null)
       }
       return newId
     })()
@@ -84,11 +85,15 @@ export function registerAccionistaHandlers(): void {
 
     db.transaction(() => {
       db.prepare(
-        `UPDATE accionistas SET nombre=@nombre, tipo=@tipo, numero=@numero, activo=@activo, notas=@notas
+        `UPDATE accionistas SET nombre=@nombre, apellido_paterno=@apellido_paterno, apellido_materno=@apellido_materno,
+         numero_socio=@numero_socio, tipo=@tipo, numero=@numero, activo=@activo, notas=@notas
          WHERE id=@id`
       ).run({
         id: input.id,
         nombre: input.nombre,
+        apellido_paterno: input.apellido_paterno ?? null,
+        apellido_materno: input.apellido_materno ?? null,
+        numero_socio: input.numero_socio ?? null,
         tipo: primary?.tipo ?? 'PARCELA',
         numero: primary?.numero ?? null,
         activo: input.activo ? 1 : 0,
@@ -97,9 +102,9 @@ export function registerAccionistaHandlers(): void {
       db.prepare('DELETE FROM propiedades WHERE accionista_id = ?').run(input.id)
       for (const p of props) {
         db.prepare(
-          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas)
-           VALUES (?, ?, ?, ?, ?)`
-        ).run(input.id, p.numero ?? null, p.tipo, p.acciones, p.hectareas)
+          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas, direccion, sector, comuna, marco)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(input.id, p.numero ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.sector ?? null, p.comuna ?? null, p.marco ?? null)
       }
     })()
 

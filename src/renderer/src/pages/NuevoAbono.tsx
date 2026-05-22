@@ -4,6 +4,7 @@ import { api } from '../lib/ipc'
 import { calcularMontoAcciones, calcularMultas, calcularTotal, formatCLP, toISODate } from '../lib/formulas'
 import { exportComprobanteAbono } from '../lib/export'
 import type { Accionista, Temporada } from '../../../shared/types'
+import { nombreCompleto } from '../../../shared/types'
 
 export default function NuevoAbono() {
   const navigate = useNavigate()
@@ -13,7 +14,6 @@ export default function NuevoAbono() {
   const [accionista, setAccionista] = useState<Accionista | null>(null)
   const [temporada, setTemporada] = useState<Temporada | null>(null)
   const [deudorConfig, setDeudorConfig] = useState<{ temporadas_adeudadas: number }>({ temporadas_adeudadas: 1 })
-  const [nextNum, setNextNum] = useState(0)
   const [saved, setSaved] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [printComprobante, setPrintComprobante] = useState(false)
@@ -31,13 +31,8 @@ export default function NuevoAbono() {
 
   useEffect(() => {
     const loadData = async () => {
-      const [t, num] = await Promise.all([
-        api.temporadas.getActive(),
-        api.pagos.nextNumeroIngreso()
-      ])
+      const t = await api.temporadas.getActive()
       setTemporada(t)
-      setNextNum(num)
-      setForm(f => ({ ...f, numero_ingreso: num }))
 
       if (preselectedId && t) {
         const [a, cfg] = await Promise.all([
@@ -66,7 +61,7 @@ export default function NuevoAbono() {
 
   const autoMultas = () => {
     if (!accionista) return
-    const m = calcularMultas(accionista.acciones, accionista.hectareas, form.temporadas_cubiertas)
+    const m = calcularMultas(accionista.acciones, accionista.hectareas, form.temporadas_cubiertas, temporada?.monto_multa_por_accion ?? 0)
     setForm(f => ({ ...f, multas: m }))
   }
 
@@ -142,7 +137,7 @@ export default function NuevoAbono() {
       {/* Current debt info */}
       {accionista && temporada && (
         <div className="card p-4 bg-amber-50 border border-amber-200 space-y-2">
-          <div className="font-semibold text-amber-900">{accionista.nombre}</div>
+          <div className="font-semibold text-amber-900">{nombreCompleto(accionista)}</div>
           {accionista.numeros && (
             <div className="text-xs text-amber-700">N° {accionista.numeros}</div>
           )}
@@ -164,8 +159,10 @@ export default function NuevoAbono() {
           {/* N° Ingreso */}
           <div>
             <label className="label">N° Ingreso</label>
-            <input type="number" className="input" value={form.numero_ingreso}
-              onChange={e => setForm(f => ({ ...f, numero_ingreso: Number(e.target.value) }))} />
+            <input type="number" className="input"
+              value={form.numero_ingreso === 0 ? '' : form.numero_ingreso}
+              placeholder="0"
+              onChange={e => setForm(f => ({ ...f, numero_ingreso: e.target.value === '' ? 0 : Number(e.target.value) }))} />
           </div>
           {/* Temporadas cubiertas */}
           <div>
@@ -213,20 +210,23 @@ export default function NuevoAbono() {
               <label className="label mb-0">Multas</label>
               <button className="text-xs text-orange-600 hover:underline" onClick={autoMultas}>Auto-calcular</button>
             </div>
-            <input type="number" className="input" value={form.multas}
-              onChange={e => setForm(f => ({ ...f, multas: Number(e.target.value) }))} />
+            <input type="number" className="input"
+              value={form.multas === 0 ? '' : form.multas} placeholder="0"
+              onChange={e => setForm(f => ({ ...f, multas: e.target.value === '' ? 0 : Number(e.target.value) }))} />
           </div>
           {/* Cuota Extraordinaria */}
           <div>
             <label className="label">Cuota Extraordinaria</label>
-            <input type="number" className="input" value={form.cuota_extraordinaria}
-              onChange={e => setForm(f => ({ ...f, cuota_extraordinaria: Number(e.target.value) }))} />
+            <input type="number" className="input"
+              value={form.cuota_extraordinaria === 0 ? '' : form.cuota_extraordinaria} placeholder="0"
+              onChange={e => setForm(f => ({ ...f, cuota_extraordinaria: e.target.value === '' ? 0 : Number(e.target.value) }))} />
           </div>
           {/* Otros Ingresos */}
           <div>
             <label className="label">Otros Ingresos</label>
-            <input type="number" className="input" value={form.otros_ingresos}
-              onChange={e => setForm(f => ({ ...f, otros_ingresos: Number(e.target.value) }))} />
+            <input type="number" className="input"
+              value={form.otros_ingresos === 0 ? '' : form.otros_ingresos} placeholder="0"
+              onChange={e => setForm(f => ({ ...f, otros_ingresos: e.target.value === '' ? 0 : Number(e.target.value) }))} />
           </div>
         </div>
 
@@ -265,7 +265,7 @@ export default function NuevoAbono() {
           <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5">
             <h2 className="font-semibold text-gray-900 mb-3">Confirmar abono</h2>
             <div className="space-y-1 text-sm text-gray-600">
-              <div className="flex justify-between"><span>Accionista:</span><span className="font-medium">{accionista.nombre}</span></div>
+              <div className="flex justify-between"><span>Accionista:</span><span className="font-medium">{nombreCompleto(accionista)}</span></div>
               <div className="flex justify-between"><span>Temporadas cubiertas:</span><span>{form.temporadas_cubiertas}</span></div>
               <div className="flex justify-between"><span>Temporadas restantes:</span>
                 <span className={remaining > 0 ? 'text-amber-600 font-medium' : 'text-green-600 font-medium'}>

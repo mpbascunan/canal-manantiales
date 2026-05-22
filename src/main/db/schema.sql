@@ -3,22 +3,22 @@
 -- This file mirrors that string exactly and is kept in sync manually.
 
 CREATE TABLE IF NOT EXISTS temporadas (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  nombre       TEXT    NOT NULL UNIQUE,
-  fecha_inicio TEXT    NOT NULL,
-  fecha_fin    TEXT    NOT NULL,
-  valor_accion REAL    NOT NULL,
-  activa       INTEGER NOT NULL DEFAULT 0,
-  nota_aviso   TEXT                        -- configurable footer text for PDF notices
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre                 TEXT    NOT NULL UNIQUE,
+  fecha_inicio           TEXT    NOT NULL,
+  fecha_fin              TEXT    NOT NULL,
+  valor_accion           REAL    NOT NULL,
+  activa                 INTEGER NOT NULL DEFAULT 0,
+  nota_aviso             TEXT,                        -- configurable footer text for PDF notices
+  fecha_multa            DATE    NULL,               -- deadline; payments after this date incur a fine
+  monto_multa_por_accion REAL    NOT NULL DEFAULT 0  -- CLP fine per (accion + hectarea)
 );
 
 CREATE TABLE IF NOT EXISTS accionistas (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  numero    TEXT,                          -- legacy; use propiedades for current data
+  numero    TEXT,
   nombre    TEXT    NOT NULL,
   tipo      TEXT    NOT NULL CHECK(tipo IN ('PARCELA','SITIO','PEQUEÑO_PROPIETARIO')),
-  acciones  REAL    NOT NULL DEFAULT 0,    -- legacy; SUM from propiedades is the source of truth
-  hectareas REAL    NOT NULL DEFAULT 0,    -- legacy; same
   activo    INTEGER NOT NULL DEFAULT 1,
   notas     TEXT
 );
@@ -91,3 +91,4 @@ CREATE TABLE IF NOT EXISTS deudores_config (
 -- v1: seed propiedades from accionistas (one-time, runs if propiedades is empty)
 -- v2: deduplicate propiedades by (accionista_id, LOWER(TRIM(numero)), tipo)
 -- v3: merge duplicate accionistas (same nombre) into a single canonical record
+-- v6: add fecha_multa and monto_multa_por_accion to temporadas

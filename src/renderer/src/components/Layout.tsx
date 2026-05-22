@@ -10,6 +10,7 @@ const navItems = [
   { to: '/pagos/mes', icon: '⊟', label: 'Pagos por Mes' },
   { to: '/resumen', icon: '≡', label: 'Resumen Contable' },
   { to: '/deudores', icon: '⚠', label: 'Deudores' },
+  { to: '/cargos', icon: '⊕', label: 'Cargos' },
   { to: '/temporadas', icon: '◷', label: 'Temporadas' },
   { to: '/importar', icon: '↑', label: 'Importar Excel' }
 ]

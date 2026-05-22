@@ -34,8 +34,7 @@ const api = {
     resumenContable: (temporadaId: number) =>
       ipcRenderer.invoke('pagos:resumen-contable', temporadaId),
     resumenMensual: (temporadaId: number) =>
-      ipcRenderer.invoke('pagos:resumen-mensual', temporadaId),
-    nextNumeroIngreso: () => ipcRenderer.invoke('pagos:next-numero-ingreso')
+      ipcRenderer.invoke('pagos:resumen-mensual', temporadaId)
   },
   // Abonos
   abonos: {
@@ -50,6 +49,17 @@ const api = {
     getConfig: (accionistaId: number, temporadaId: number) =>
       ipcRenderer.invoke('deudores:get-config', accionistaId, temporadaId),
     upsertConfig: (cfg: any) => ipcRenderer.invoke('deudores:upsert-config', cfg)
+  },
+  // Cargos
+  cargos: {
+    listByTemporada: (temporadaId: number) => ipcRenderer.invoke('cargos:list-by-temporada', temporadaId),
+    getWithAccionistas: (id: number) => ipcRenderer.invoke('cargos:get-with-accionistas', id),
+    create: (input: any) => ipcRenderer.invoke('cargos:create', input),
+    addAccionistas: (cargoId: number, accionistaIds: number[]) => ipcRenderer.invoke('cargos:add-accionistas', cargoId, accionistaIds),
+    removeAccionista: (cargoId: number, accionistaId: number) => ipcRenderer.invoke('cargos:remove-accionista', cargoId, accionistaId),
+    setPagado: (cargoId: number, accionistaId: number, pagado: boolean) => ipcRenderer.invoke('cargos:set-pagado', cargoId, accionistaId, pagado),
+    delete: (id: number) => ipcRenderer.invoke('cargos:delete', id),
+    listByAccionista: (accionistaId: number, temporadaId: number) => ipcRenderer.invoke('cargos:list-by-accionista', accionistaId, temporadaId)
   },
   // Import
   import: {

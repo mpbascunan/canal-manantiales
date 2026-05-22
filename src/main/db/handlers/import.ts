@@ -137,8 +137,8 @@ export function registerImportHandlers(): void {
          AND tipo = ?`
     )
     const insertAccionista = db.prepare(
-      `INSERT INTO accionistas (numero, nombre, tipo, acciones, hectareas, activo)
-       VALUES (@numero, @nombre, @tipo, @acciones, @hectareas, 1)`
+      `INSERT INTO accionistas (numero, nombre, tipo, activo)
+       VALUES (@numero, @nombre, @tipo, 1)`
     )
     const insertPropiedad = db.prepare(
       `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas)
@@ -170,9 +170,7 @@ export function registerImportHandlers(): void {
             const r = insertAccionista.run({
               numero: row.numero ?? null,
               nombre: name,
-              tipo: row.tipo,
-              acciones: 0,
-              hectareas: 0
+              tipo: row.tipo
             })
             insertPropiedad.run(
               r.lastInsertRowid,

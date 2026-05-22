@@ -24,15 +24,16 @@ export function registerDeudorHandlers(): void {
     return getDb()
       .prepare(
         `SELECT a.id, a.nombre, a.activo, a.notas,
-                COALESCE(pt.total_acciones, a.acciones)   AS acciones,
-                COALESCE(pt.total_hectareas, a.hectareas) AS hectareas,
+                COALESCE(pt.total_acciones, 0)   AS acciones,
+                COALESCE(pt.total_hectareas, 0) AS hectareas,
                 COALESCE(pf.tipo, a.tipo)                 AS tipo,
                 COALESCE(pf.numero, a.numero)             AS numero,
                 COALESCE(pt.numeros, a.numero)            AS numeros,
                 COALESCE(dc.temporadas_adeudadas, 1)      AS temporadas_adeudadas,
                 COALESCE(dc.cuota_extraordinaria, 0)      AS cuota_extraordinaria,
                 COALESCE(dc.otros_ingresos, 0)            AS otros_ingresos,
-                COALESCE(abn.total_abonado, 0)            AS total_abonado
+                COALESCE(abn.total_abonado, 0)            AS total_abonado,
+                COALESCE(cg.total_cargos, 0)              AS total_cargos
          FROM accionistas a
          ${PROPS_AGG}
          LEFT JOIN deudores_config dc
@@ -43,6 +44,20 @@ export function registerDeudorHandlers(): void {
                WHERE temporada_id = ?
                GROUP BY accionista_id
          ) abn ON abn.accionista_id = a.id
+         LEFT JOIN (
+               SELECT ca.accionista_id,
+                      SUM(c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))) AS total_cargos
+               FROM cargo_accionistas ca
+               JOIN cargos c ON c.id = ca.cargo_id
+               LEFT JOIN (
+                 SELECT accionista_id,
+                        SUM(acciones)  AS total_acciones,
+                        SUM(hectareas) AS total_hectareas
+                 FROM propiedades GROUP BY accionista_id
+               ) pt ON pt.accionista_id = ca.accionista_id
+               WHERE c.temporada_id = ?
+               GROUP BY ca.accionista_id
+         ) cg ON cg.accionista_id = a.id
          WHERE a.activo = 1
            AND NOT EXISTS (
              SELECT 1 FROM pagos p
@@ -50,7 +65,7 @@ export function registerDeudorHandlers(): void {
            )
          ORDER BY a.nombre`
       )
-      .all(temporadaId, temporadaId, temporadaId)
+      .all(temporadaId, temporadaId, temporadaId, temporadaId)
   })
 
   ipcMain.handle('deudores:get-config', (_e, accionistaId: number, temporadaId: number) => {
@@ -66,11 +81,31 @@ export function registerDeudorHandlers(): void {
       )
       .get(accionistaId, temporadaId) as { total_abonado: number }
 
+    const cargos = db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))), 0) AS total_cargos,
+           COALESCE(SUM(CASE WHEN ca.pagado = 1 THEN c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0)) ELSE 0 END), 0) AS total_cargos_pagados
+         FROM cargo_accionistas ca
+         JOIN cargos c ON c.id = ca.cargo_id
+         LEFT JOIN (
+           SELECT accionista_id,
+                  SUM(acciones)  AS total_acciones,
+                  SUM(hectareas) AS total_hectareas
+           FROM propiedades
+           GROUP BY accionista_id
+         ) pt ON pt.accionista_id = ca.accionista_id
+         WHERE ca.accionista_id = ? AND c.temporada_id = ?`
+      )
+      .get(accionistaId, temporadaId) as { total_cargos: number; total_cargos_pagados: number }
+
     return {
-      temporadas_adeudadas: config?.temporadas_adeudadas ?? 1,
-      cuota_extraordinaria: config?.cuota_extraordinaria ?? 0,
-      otros_ingresos:       config?.otros_ingresos ?? 0,
-      total_abonado:        abonado.total_abonado
+      temporadas_adeudadas:  config?.temporadas_adeudadas ?? 1,
+      cuota_extraordinaria:  config?.cuota_extraordinaria ?? 0,
+      otros_ingresos:        config?.otros_ingresos ?? 0,
+      total_abonado:         abonado.total_abonado,
+      total_cargos:          cargos.total_cargos,
+      total_cargos_pagados:  cargos.total_cargos_pagados
     }
   })
 

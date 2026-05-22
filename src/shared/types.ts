@@ -8,6 +8,8 @@ export interface Temporada {
   valor_accion: number
   activa: boolean
   nota_aviso: string | null
+  fecha_multa: string | null
+  monto_multa_por_accion: number
 }
 
 export interface Propiedad {
@@ -17,6 +19,10 @@ export interface Propiedad {
   tipo: AccionistaType
   acciones: number
   hectareas: number
+  direccion: string | null
+  sector: string | null
+  comuna: string | null
+  marco: string | null
 }
 
 export interface PropiedadInput {
@@ -25,6 +31,10 @@ export interface PropiedadInput {
   tipo: AccionistaType
   acciones: number
   hectareas: number
+  direccion?: string | null
+  sector?: string | null
+  comuna?: string | null
+  marco?: string | null
 }
 
 export interface Accionista {
@@ -32,6 +42,9 @@ export interface Accionista {
   numero: string | null   // primary number (first propiedad or legacy)
   numeros: string | null  // all numbers joined: "84, 14, 47-A"
   nombre: string
+  apellido_paterno: string | null
+  apellido_materno: string | null
+  numero_socio: string | null
   tipo: AccionistaType    // primary tipo (first propiedad or legacy)
   acciones: number        // total from all propiedades (or legacy)
   hectareas: number       // total from all propiedades (or legacy)
@@ -42,9 +55,16 @@ export interface Accionista {
 export interface AccionistaInput {
   id?: number
   nombre: string
+  apellido_paterno?: string | null
+  apellido_materno?: string | null
+  numero_socio?: string | null
   activo: boolean
   notas?: string | null
   propiedades: PropiedadInput[]
+}
+
+export function nombreCompleto(a: Pick<Accionista, 'nombre' | 'apellido_paterno' | 'apellido_materno'>): string {
+  return [a.nombre, a.apellido_paterno, a.apellido_materno].filter(Boolean).join(' ')
 }
 
 export interface Pago {
@@ -126,6 +146,7 @@ export interface Deudor extends Accionista {
   cuota_extraordinaria: number
   otros_ingresos: number
   total_abonado: number   // SUM of abonos for this accionista+temporada
+  total_cargos: number    // SUM of cargo_accionistas.monto for this accionista+temporada
   monto_adeudado: number
   multas: number
   total: number
@@ -152,4 +173,40 @@ export interface ImportResult {
 
 export interface AccionistaConPago extends Accionista {
   pagó_temporada_activa: boolean
+}
+
+export interface Cargo {
+  id: number
+  nombre: string
+  temporada_id: number
+  tarifa: number
+  fecha: string
+  notas: string | null
+  created_at: string
+  temporada_nombre?: string
+  accionista_count?: number
+  total_monto?: number
+  pagados_count?: number
+}
+
+export interface CargoAccionista {
+  id: number
+  nombre: string
+  acciones: number
+  hectareas: number
+  monto: number
+  pagado: boolean
+}
+
+export interface CargoConAccionistas extends Cargo {
+  accionistas: CargoAccionista[]
+}
+
+export interface CargoCreateInput {
+  nombre: string
+  temporada_id: number
+  tarifa: number
+  fecha: string
+  notas?: string | null
+  accionista_ids: number[]
 }

@@ -39,19 +39,28 @@ export function registerPagoHandlers(): void {
 
   ipcMain.handle('pagos:create', (_e, p: PagoInput) => {
     const db = getDb()
-    const result = db
-      .prepare(
-        `INSERT INTO pagos
-         (numero_ingreso, accionista_id, temporada_id, fecha, temporadas_pagadas,
-          monto_acciones, multas, cuota_extraordinaria, otros_ingresos, total, notas)
-         VALUES
-         (@numero_ingreso, @accionista_id, @temporada_id, @fecha, @temporadas_pagadas,
-          @monto_acciones, @multas, @cuota_extraordinaria, @otros_ingresos, @total, @notas)`
-      )
-      .run(p)
-    return db
-      .prepare(`${JOIN_SQL} WHERE p.id = ?`)
-      .get(result.lastInsertRowid)
+    const insertPago = db.prepare(
+      `INSERT INTO pagos
+       (numero_ingreso, accionista_id, temporada_id, fecha, temporadas_pagadas,
+        monto_acciones, multas, cuota_extraordinaria, otros_ingresos, total, notas)
+       VALUES
+       (@numero_ingreso, @accionista_id, @temporada_id, @fecha, @temporadas_pagadas,
+        @monto_acciones, @multas, @cuota_extraordinaria, @otros_ingresos, @total, @notas)`
+    )
+    const markCargosPaid = db.prepare(
+      `UPDATE cargo_accionistas SET pagado = 1
+       WHERE accionista_id = @accionista_id
+         AND cargo_id IN (SELECT id FROM cargos WHERE temporada_id = @temporada_id)`
+    )
+
+    let pagoId: bigint | number
+    db.transaction(() => {
+      const result = insertPago.run(p)
+      pagoId = result.lastInsertRowid
+      markCargosPaid.run({ accionista_id: p.accionista_id, temporada_id: p.temporada_id })
+    })()
+
+    return db.prepare(`${JOIN_SQL} WHERE p.id = ?`).get(pagoId!)
   })
 
   ipcMain.handle('pagos:delete', (_e, id: number) => {
@@ -102,17 +111,4 @@ export function registerPagoHandlers(): void {
       .all(temporadaId, temporadaId)
   })
 
-  ipcMain.handle('pagos:next-numero-ingreso', () => {
-    const row = getDb()
-      .prepare(
-        `SELECT COALESCE(MAX(num), 5000) + 1 AS next_num
-         FROM (
-           SELECT numero_ingreso AS num FROM pagos
-           UNION ALL
-           SELECT numero_ingreso FROM abonos
-         )`
-      )
-      .get() as { next_num: number }
-    return row.next_num
-  })
 }

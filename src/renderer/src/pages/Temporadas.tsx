@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/ipc'
-import { formatCLP } from '../lib/formulas'
+import { formatCLP, formatFecha } from '../lib/formulas'
 import type { Temporada } from '../../../shared/types'
 
 const EMPTY: Omit<Temporada, 'id'> = {
@@ -9,7 +9,9 @@ const EMPTY: Omit<Temporada, 'id'> = {
   fecha_fin: '',
   valor_accion: 41000,
   activa: false,
-  nota_aviso: ''
+  nota_aviso: '',
+  fecha_multa: null,
+  monto_multa_por_accion: 0
 }
 
 export default function Temporadas() {
@@ -63,6 +65,11 @@ export default function Temporadas() {
               <div className="text-xs text-gray-500 mt-0.5">
                 {t.fecha_inicio} → {t.fecha_fin} · Acción: {formatCLP(t.valor_accion)}
               </div>
+              {t.fecha_multa && (
+                <div className="text-xs text-orange-600 mt-0.5">
+                  Multa desde {formatFecha(t.fecha_multa)} · {formatCLP(t.monto_multa_por_accion)}/acción
+                </div>
+              )}
             </div>
             <div className="flex gap-2">
               {!t.activa && (
@@ -99,6 +106,17 @@ export default function Temporadas() {
             <Field label="Nota en avisos de cobro (opcional)">
               <textarea className="input" rows={3} value={editing.nota_aviso ?? ''} onChange={e => setEditing({ ...editing, nota_aviso: e.target.value })} placeholder="Texto que aparecerá al pie de los avisos de cobro..." />
             </Field>
+            <Field label="Fecha límite de pago (multa, opcional)">
+              <input type="date" className="input" value={editing.fecha_multa ?? ''} onChange={e => setEditing({ ...editing, fecha_multa: e.target.value || null })} />
+            </Field>
+            {editing.fecha_multa && (
+              <Field label="Multa por acción (CLP)">
+                <input type="number" min={0} className="input"
+                  value={(editing.monto_multa_por_accion ?? 0) === 0 ? '' : editing.monto_multa_por_accion}
+                  placeholder="0"
+                  onChange={e => setEditing({ ...editing, monto_multa_por_accion: e.target.value === '' ? 0 : Number(e.target.value) })} />
+              </Field>
+            )}
           </div>
           <div className="flex justify-end gap-2 mt-4">
             <button className="btn-secondary" onClick={() => setEditing(null)}>Cancelar</button>

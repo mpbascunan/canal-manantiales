@@ -15,10 +15,10 @@ export function registerTemporadaHandlers(): void {
     const db = getDb()
     const result = db
       .prepare(
-        `INSERT INTO temporadas (nombre, fecha_inicio, fecha_fin, valor_accion, activa, nota_aviso)
-         VALUES (@nombre, @fecha_inicio, @fecha_fin, @valor_accion, @activa, @nota_aviso)`
+        `INSERT INTO temporadas (nombre, fecha_inicio, fecha_fin, valor_accion, activa, nota_aviso, fecha_multa, monto_multa_por_accion)
+         VALUES (@nombre, @fecha_inicio, @fecha_fin, @valor_accion, @activa, @nota_aviso, @fecha_multa, @monto_multa_por_accion)`
       )
-      .run({ ...t, activa: t.activa ? 1 : 0 })
+      .run({ ...t, activa: t.activa ? 1 : 0, fecha_multa: t.fecha_multa ?? null, monto_multa_por_accion: t.monto_multa_por_accion ?? 0 })
     return db.prepare('SELECT * FROM temporadas WHERE id = ?').get(result.lastInsertRowid)
   })
 
@@ -26,9 +26,10 @@ export function registerTemporadaHandlers(): void {
     getDb()
       .prepare(
         `UPDATE temporadas SET nombre=@nombre, fecha_inicio=@fecha_inicio, fecha_fin=@fecha_fin,
-         valor_accion=@valor_accion, nota_aviso=@nota_aviso WHERE id=@id`
+         valor_accion=@valor_accion, nota_aviso=@nota_aviso, fecha_multa=@fecha_multa,
+         monto_multa_por_accion=@monto_multa_por_accion WHERE id=@id`
       )
-      .run(t)
+      .run({ ...t, fecha_multa: t.fecha_multa ?? null, monto_multa_por_accion: t.monto_multa_por_accion ?? 0 })
     return getDb().prepare('SELECT * FROM temporadas WHERE id = ?').get(t.id)
   })
 

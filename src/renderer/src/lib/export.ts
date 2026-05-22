@@ -2,7 +2,8 @@ import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { formatCLP, formatFecha, mesNombre, formatNumber, calcularMontoAcciones } from './formulas'
-import type { Pago, ResumenMensual, ResumenContable, Deudor, Temporada, Accionista } from '../../../shared/types'
+import type { Pago, ResumenMensual, ResumenContable, Deudor, Temporada, Accionista, Propiedad, AccionistaType } from '../../../shared/types'
+import { nombreCompleto } from '../../../shared/types'
 
 // ── Excel exports ────────────────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ export function exportDeudores(deudores: Deudor[], temporada: Temporada): void {
   const headers = ['Accionista', 'N°', 'Acciones', 'Hectáreas', 'N° Temporadas',
                    'Monto Adeudado', 'Multas', 'Cuota Extra.', 'Otros', 'Total']
   const rows = deudores.map(d => [
-    d.nombre, (d as any).numeros ?? d.numero ?? '',
+    nombreCompleto(d), (d as any).numeros ?? d.numero ?? '',
     d.acciones || '', d.hectareas || '',
     d.temporadas_adeudadas, d.monto_adeudado, d.multas,
     d.cuota_extraordinaria, d.otros_ingresos, d.total
@@ -163,30 +164,47 @@ export function exportResumenContablePdf(
   doc.save(`Resumen_${temporada.nombre}.pdf`)
 }
 
-export function exportAvisosCobro(accionistas: Accionista[], temporada: Temporada, valorAccion: number): void {
+const PROP_TIPO_LABELS: Record<AccionistaType, string> = {
+  PARCELA: 'Parcela',
+  SITIO: 'Sitio',
+  PEQUEÑO_PROPIETARIO: 'Propiedad pequeña'
+}
+
+export function exportAvisosCobro(accionistas: Accionista[], temporada: Temporada, valorAccion: number, multaVencimiento = 0, propiedades: Propiedad[] = []): void {
   const doc = newPdf()
 
   accionistas.forEach((a, i) => {
     if (i > 0) doc.addPage()
 
     const montoAcc = calcularMontoAcciones(valorAccion, a.acciones, a.hectareas, 1)
-    const total = montoAcc
+    const total = montoAcc + multaVencimiento
 
     doc.setFontSize(12).setFont('helvetica', 'bold')
     doc.text(INSTITUTION, 105, 20, { align: 'center' })
     doc.setFontSize(11)
-    doc.text(`AVISO DE COBRO — TEMPORADA ${temporada.nombre}`, 105, 28, { align: 'center' })
+    doc.text(`AVISO DE COBRANZA — TEMPORADA ${temporada.nombre}`, 105, 28, { align: 'center' })
 
     doc.setDrawColor(7, 89, 133).setLineWidth(0.5)
     doc.line(14, 32, 196, 32)
 
     doc.setFontSize(10).setFont('helvetica', 'normal')
-    doc.text(`Estimado/a: ${a.nombre}`, 14, 42)
+    doc.text(`Estimado/a: ${nombreCompleto(a)}`, 14, 42)
 
-    // Show all property numbers if available
-    const displayNumeros = a.numeros || a.numero
-    if (displayNumeros) {
-      doc.text(`N° Parcela/Sitio: ${displayNumeros}`, 14, 49)
+    // Show property list with type labels
+    let propY = 49
+    if (propiedades.length > 0) {
+      propiedades.forEach((p, pi) => {
+        const label = PROP_TIPO_LABELS[p.tipo]
+        const num = p.numero ? ` N° ${p.numero}` : ''
+        doc.text(`${label}${num}`, 14, propY + pi * 6)
+      })
+      propY += propiedades.length * 6
+    } else {
+      const displayNumeros = a.numeros || a.numero
+      if (displayNumeros) {
+        doc.text(`N° Parcela/Sitio: ${displayNumeros}`, 14, propY)
+        propY += 6
+      }
     }
 
     doc.setFontSize(9)
@@ -194,20 +212,26 @@ export function exportAvisosCobro(accionistas: Accionista[], temporada: Temporad
     if (a.acciones > 0) info.push(['Acciones que posee:', formatNumber(a.acciones)])
     if (a.hectareas > 0) info.push(['Hectáreas que posee:', formatNumber(a.hectareas)])
     info.push(['Valor acción:', formatCLP(valorAccion)])
+    if (temporada.fecha_multa) info.push(['Fecha límite de pago:', formatFecha(temporada.fecha_multa)])
 
-    let y = displayNumeros ? 58 : 49
+    let y = propY + 3
     for (const [k, v] of info) {
       doc.setFont('helvetica', 'bold').text(k, 14, y)
       doc.setFont('helvetica', 'normal').text(v, 70, y)
       y += 6
     }
 
+    const bodyRows: string[][] = [
+      [`Cuota por acciones (1 temporada)`, formatCLP(montoAcc)]
+    ]
+    if (multaVencimiento > 0) {
+      bodyRows.push(['Multa por mora', formatCLP(multaVencimiento)])
+    }
+
     autoTable(doc, {
       startY: y + 4,
       head: [['Concepto', 'Monto']],
-      body: [
-        [`Cuota por acciones (1 temporada)`, formatCLP(montoAcc)]
-      ],
+      body: bodyRows,
       foot: [['TOTAL A PAGAR', formatCLP(total)]],
       styles: { fontSize: 9 },
       headStyles: { fillColor: [7, 89, 133] },
@@ -224,8 +248,8 @@ export function exportAvisosCobro(accionistas: Accionista[], temporada: Temporad
   })
 
   const filename = accionistas.length === 1
-    ? `Aviso_${accionistas[0].nombre.replace(/\s+/g, '_')}.pdf`
-    : `Avisos_Cobro_${temporada.nombre}.pdf`
+    ? `Aviso_${nombreCompleto(accionistas[0]).replace(/\s+/g, '_')}.pdf`
+    : `Avisos_Cobranza_${temporada.nombre}.pdf`
   doc.save(filename)
 }
 
@@ -257,7 +281,7 @@ export function exportComprobanteAbono(data: ComprobanteAbonoData): void {
   doc.line(14, 32, 196, 32)
 
   doc.setFontSize(10).setFont('helvetica', 'normal')
-  doc.text(`Accionista: ${accionista.nombre}`, 14, 42)
+  doc.text(`Accionista: ${nombreCompleto(accionista)}`, 14, 42)
 
   const displayNumeros = accionista.numeros || accionista.numero
   if (displayNumeros) doc.text(`N° Parcela/Sitio: ${displayNumeros}`, 14, 49)
@@ -302,5 +326,5 @@ export function exportComprobanteAbono(data: ComprobanteAbonoData): void {
     doc.setTextColor(0, 0, 0)
   }
 
-  doc.save(`Abono_${accionista.nombre.replace(/\s+/g, '_')}_${data.fecha}.pdf`)
+  doc.save(`Abono_${nombreCompleto(accionista).replace(/\s+/g, '_')}_${data.fecha}.pdf`)
 }

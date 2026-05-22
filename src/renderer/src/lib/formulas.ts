@@ -10,11 +10,29 @@ export function calcularMontoAcciones(
 export function calcularMultas(
   acciones: number,
   hectareas: number,
-  periodosAtrasados: number
+  temporadasAdeudadas: number,
+  montoPorAccion: number
 ): number {
-  const a = acciones > 0 ? acciones : 1
-  const h = hectareas > 0 ? hectareas : 1
-  return 5000 * a * h * periodosAtrasados
+  if (temporadasAdeudadas <= 1) return 0
+  return montoPorAccion * (acciones + hectareas) * (temporadasAdeudadas - 1)
+}
+
+export function tieneMultaVencimiento(temporada: { fecha_multa: string | null }): boolean {
+  if (!temporada.fecha_multa) return false
+  return new Date() > new Date(temporada.fecha_multa)
+}
+
+export function calcularMultaVencimiento(
+  acciones: number,
+  hectareas: number,
+  montoPorAccion: number,
+  valorAccion: number,
+  totalAbonado: number
+): number {
+  const montoUnaTemporada = valorAccion * (acciones + hectareas)
+  if (montoUnaTemporada === 0) return 0
+  const fraccionPendiente = Math.max(0, 1 - Math.min(1, totalAbonado / montoUnaTemporada))
+  return montoPorAccion * (acciones + hectareas) * fraccionPendiente
 }
 
 export function calcularTotal(
@@ -24,6 +42,54 @@ export function calcularTotal(
   otrosIngresos: number
 ): number {
   return montoAcciones + multas + cuotaExtraordinaria + otrosIngresos
+}
+
+export interface DeudaParams {
+  valorAccion: number
+  acciones: number
+  hectareas: number
+  temporadasAdeudadas: number
+  cuotaExtraordinaria: number
+  otrosIngresos: number
+  totalAbonado: number
+  totalCargos: number
+  totalCargosPagados: number
+  montoPorAccion: number
+  multaVencimiento: number
+}
+
+export interface DeudaBreakdown {
+  monto_acciones: number
+  multas: number
+  cuota_extraordinaria: number
+  otros_ingresos: number
+  subtotal: number           // base debt without cargos
+  total_cargos: number
+  total_cargos_pendientes: number
+  total: number              // subtotal + total_cargos
+  abonado: number
+  pendiente: number          // max(0, subtotal - abonado) + total_cargos_pendientes
+}
+
+export function calcularDeuda(p: DeudaParams): DeudaBreakdown {
+  const monto_acciones = calcularMontoAcciones(p.valorAccion, p.acciones, p.hectareas, p.temporadasAdeudadas)
+  const multas = calcularMultas(p.acciones, p.hectareas, p.temporadasAdeudadas, p.montoPorAccion) + p.multaVencimiento
+  const subtotal = calcularTotal(monto_acciones, multas, p.cuotaExtraordinaria, p.otrosIngresos)
+  const total_cargos_pendientes = p.totalCargos - p.totalCargosPagados
+  const total = subtotal + p.totalCargos
+  const pendiente = Math.max(0, subtotal - p.totalAbonado) + total_cargos_pendientes
+  return {
+    monto_acciones,
+    multas,
+    cuota_extraordinaria: p.cuotaExtraordinaria,
+    otros_ingresos: p.otrosIngresos,
+    subtotal,
+    total_cargos: p.totalCargos,
+    total_cargos_pendientes,
+    total,
+    abonado: p.totalAbonado,
+    pendiente
+  }
 }
 
 export function formatCLP(value: number): string {

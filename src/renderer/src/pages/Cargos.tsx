@@ -17,13 +17,23 @@ export default function Cargos() {
 
   // Create form
   const [showForm, setShowForm] = useState(false)
-  const [formNombre, setFormNombre] = useState('')
+  const [formNombrePreset, setFormNombrePreset] = useState('')
+  const [formNombreCustom, setFormNombreCustom] = useState('')
+  const [formTipoTarifa, setFormTipoTarifa] = useState<'proporcional' | 'fija'>('proporcional')
   const [formTarifa, setFormTarifa] = useState<number>(0)
   const [formFecha, setFormFecha] = useState(toISODate(new Date()))
   const [formNotas, setFormNotas] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [searchForm, setSearchForm] = useState('')
   const [saving, setSaving] = useState(false)
+
+  const NOMBRES_PREDEFINIDOS = [
+    'Limpieza acequia',
+    'Multa por inasistencia a reunion',
+    'Multa por inasistencia a votaciones',
+    'Cuota extraordinaria'
+  ]
+  const formNombre = formNombrePreset === '__custom__' ? formNombreCustom : formNombrePreset
 
   // Add-accionistas panel (inside expanded detail)
   const [showAddPanel, setShowAddPanel] = useState(false)
@@ -82,10 +92,10 @@ export default function Cargos() {
   // Preview: estimated monto per selected accionista
   const previewTotal = useMemo(() => {
     if (formTarifa <= 0) return 0
-    return accionistas
-      .filter(a => selectedIds.has(a.id))
-      .reduce((sum, a) => sum + formTarifa * (a.acciones + a.hectareas), 0)
-  }, [accionistas, selectedIds, formTarifa])
+    const selected = accionistas.filter(a => selectedIds.has(a.id))
+    if (formTipoTarifa === 'fija') return formTarifa * selected.length
+    return selected.reduce((sum, a) => sum + formTarifa * (a.acciones + a.hectareas), 0)
+  }, [accionistas, selectedIds, formTarifa, formTipoTarifa])
 
   const handleCreate = async () => {
     if (!formNombre.trim()) return alert('Ingresa un nombre para el cargo')
@@ -96,6 +106,7 @@ export default function Cargos() {
       nombre: formNombre.trim(),
       temporada_id: selectedTemporadaId,
       tarifa: formTarifa,
+      tipo_tarifa: formTipoTarifa,
       fecha: formFecha,
       notas: formNotas || null,
       accionista_ids: Array.from(selectedIds)
@@ -107,7 +118,8 @@ export default function Cargos() {
   }
 
   const resetForm = () => {
-    setFormNombre(''); setFormTarifa(0); setFormFecha(toISODate(new Date()))
+    setFormNombrePreset(''); setFormNombreCustom(''); setFormTarifa(0)
+    setFormTipoTarifa('proporcional'); setFormFecha(toISODate(new Date()))
     setFormNotas(''); setSelectedIds(new Set()); setSearchForm('')
   }
 
@@ -172,7 +184,7 @@ export default function Cargos() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Cargos</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Cobros adicionales por tarifa × (acciones + hectáreas)
+            Cobros adicionales
           </p>
         </div>
         <button className="btn-primary" onClick={() => setShowForm(true)} disabled={!selectedTemporadaId}>
@@ -235,7 +247,9 @@ export default function Cargos() {
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-gray-900">{cargo.nombre}</span>
                         <span className="text-xs text-gray-400">
-                          tarifa {formatCLP(cargo.tarifa)} / (acc + ha)
+                          {cargo.tipo_tarifa === 'fija'
+                            ? `monto fijo ${formatCLP(cargo.tarifa)} / accionista`
+                            : `tarifa ${formatCLP(cargo.tarifa)} / (acc + ha)`}
                         </span>
                       </div>
                       <div className="text-xs text-gray-500 mt-0.5">
@@ -363,7 +377,7 @@ export default function Cargos() {
                                     />
                                     <span className="text-sm text-gray-800">{a.nombre}</span>
                                     <span className="text-xs text-gray-400 ml-auto">
-                                      {formatCLP(cargo.tarifa * (a.acciones + a.hectareas))}
+                                      {formatCLP(cargo.tipo_tarifa === 'fija' ? cargo.tarifa : cargo.tarifa * (a.acciones + a.hectareas))}
                                     </span>
                                   </label>
                                 ))}
@@ -408,15 +422,61 @@ export default function Cargos() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="label">Nombre del cargo</label>
-                  <input
+                  <select
                     className="input"
-                    placeholder="Ej: Limpieza, Mantención canal, Cuota emergencia…"
-                    value={formNombre}
-                    onChange={e => setFormNombre(e.target.value)}
-                  />
+                    value={formNombrePreset}
+                    onChange={e => { setFormNombrePreset(e.target.value); if (e.target.value !== '__custom__') setFormNombreCustom('') }}
+                  >
+                    <option value="">— Seleccionar nombre —</option>
+                    {NOMBRES_PREDEFINIDOS.map(n => <option key={n} value={n}>{n}</option>)}
+                    <option value="__custom__">Personalizado…</option>
+                  </select>
+                  {formNombrePreset === '__custom__' && (
+                    <input
+                      className="input mt-2"
+                      placeholder="Nombre personalizado del cargo…"
+                      value={formNombreCustom}
+                      onChange={e => setFormNombreCustom(e.target.value)}
+                      autoFocus
+                    />
+                  )}
                 </div>
+
+                {/* Tipo de tarifa toggle */}
+                <div className="col-span-2">
+                  <label className="label">Tipo de cobro</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFormTipoTarifa('proporcional')}
+                      className={`flex-1 py-2 px-3 text-sm rounded-md border transition-colors ${
+                        formTipoTarifa === 'proporcional'
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-400'
+                      }`}
+                    >
+                      Proporcional
+                      <span className="block text-xs opacity-70 font-normal">tarifa × (acc + ha)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormTipoTarifa('fija')}
+                      className={`flex-1 py-2 px-3 text-sm rounded-md border transition-colors ${
+                        formTipoTarifa === 'fija'
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-400'
+                      }`}
+                    >
+                      Fija
+                      <span className="block text-xs opacity-70 font-normal">igual para todos</span>
+                    </button>
+                  </div>
+                </div>
+
                 <div>
-                  <label className="label">Tarifa ($ por acc + ha)</label>
+                  <label className="label">
+                    {formTipoTarifa === 'fija' ? 'Monto fijo por accionista' : 'Tarifa ($ por acc + ha)'}
+                  </label>
                   <input
                     type="number"
                     min={0}
@@ -426,7 +486,9 @@ export default function Cargos() {
                     placeholder="0"
                   />
                   <p className="text-xs text-gray-400 mt-0.5">
-                    Monto = tarifa × (acciones + hectáreas) por accionista
+                    {formTipoTarifa === 'fija'
+                      ? 'Monto idéntico para cada accionista seleccionado'
+                      : 'Monto = tarifa × (acciones + hectáreas) por accionista'}
                   </p>
                 </div>
                 <div>
@@ -513,7 +575,7 @@ export default function Cargos() {
                         </div>
                         {formTarifa > 0 && (
                           <span className="text-xs tabular-nums text-indigo-700 font-medium shrink-0">
-                            {formatCLP(formTarifa * (a.acciones + a.hectareas))}
+                            {formatCLP(formTipoTarifa === 'fija' ? formTarifa : formTarifa * (a.acciones + a.hectareas))}
                           </span>
                         )}
                       </label>
@@ -525,7 +587,10 @@ export default function Cargos() {
               {selectedIds.size > 0 && formTarifa > 0 && (
                 <div className="bg-indigo-50 border border-indigo-200 rounded-md px-4 py-2.5 text-sm text-indigo-800">
                   <strong>{selectedIds.size}</strong> accionistas ·{' '}
-                  Tarifa: <strong>{formatCLP(formTarifa)}</strong> ·{' '}
+                  {formTipoTarifa === 'fija'
+                    ? <>Monto fijo: <strong>{formatCLP(formTarifa)}</strong></>
+                    : <>Tarifa: <strong>{formatCLP(formTarifa)}</strong> / (acc + ha)</>
+                  } ·{' '}
                   Total estimado: <strong>{formatCLP(previewTotal)}</strong>
                 </div>
               )}

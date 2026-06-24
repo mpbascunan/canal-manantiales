@@ -180,6 +180,7 @@ export interface Cargo {
   nombre: string
   temporada_id: number
   tarifa: number
+  tipo_tarifa: 'proporcional' | 'fija'
   fecha: string
   notas: string | null
   created_at: string
@@ -202,10 +203,18 @@ export interface CargoConAccionistas extends Cargo {
   accionistas: CargoAccionista[]
 }
 
+export interface CargoResumen {
+  id: number
+  nombre: string
+  total_emitido: number
+  total_cobrado: number
+}
+
 export interface CargoCreateInput {
   nombre: string
   temporada_id: number
   tarifa: number
+  tipo_tarifa: 'proporcional' | 'fija'
   fecha: string
   notas?: string | null
   accionista_ids: number[]

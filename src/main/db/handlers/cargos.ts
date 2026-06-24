@@ -59,7 +59,8 @@ export function registerCargoHandlers(): void {
   })
 
   // Create a cargo header + junction rows in one transaction.
-  // monto per accionista is computed: tarifa × (acciones + hectareas).
+  // For 'proporcional': monto = tarifa × (acciones + hectareas).
+  // For 'fija': monto = tarifa (same for every accionista).
   ipcMain.handle(
     'cargos:create',
     (
@@ -68,12 +69,14 @@ export function registerCargoHandlers(): void {
         nombre: string
         temporada_id: number
         tarifa: number
+        tipo_tarifa: 'proporcional' | 'fija'
         fecha: string
         notas?: string | null
         accionista_ids: number[]
       }
     ) => {
       const db = getDb()
+      const tipoTarifa = input.tipo_tarifa ?? 'proporcional'
 
       const getAccionista = db.prepare(
         `SELECT COALESCE(pt.total_acciones,  0) AS acciones,
@@ -90,8 +93,8 @@ export function registerCargoHandlers(): void {
       )
 
       const insertCargo = db.prepare(
-        `INSERT INTO cargos (nombre, temporada_id, tarifa, fecha, notas)
-         VALUES (@nombre, @temporada_id, @tarifa, @fecha, @notas)`
+        `INSERT INTO cargos (nombre, temporada_id, tarifa, tipo_tarifa, fecha, notas)
+         VALUES (@nombre, @temporada_id, @tarifa, @tipo_tarifa, @fecha, @notas)`
       )
       const insertCA = db.prepare(
         `INSERT OR IGNORE INTO cargo_accionistas (cargo_id, accionista_id, monto)
@@ -104,14 +107,20 @@ export function registerCargoHandlers(): void {
           nombre: input.nombre,
           temporada_id: input.temporada_id,
           tarifa: input.tarifa,
+          tipo_tarifa: tipoTarifa,
           fecha: input.fecha,
           notas: input.notas ?? null
         })
         cargoId = Number(result.lastInsertRowid)
 
         for (const accionistaId of input.accionista_ids) {
-          const row = getAccionista.get(accionistaId) as { acciones: number; hectareas: number } | undefined
-          const monto = input.tarifa * ((row?.acciones ?? 0) + (row?.hectareas ?? 0))
+          let monto: number
+          if (tipoTarifa === 'fija') {
+            monto = input.tarifa
+          } else {
+            const row = getAccionista.get(accionistaId) as { acciones: number; hectareas: number } | undefined
+            monto = input.tarifa * ((row?.acciones ?? 0) + (row?.hectareas ?? 0))
+          }
           insertCA.run({ cargo_id: cargoId, accionista_id: accionistaId, monto })
         }
       })()
@@ -123,7 +132,7 @@ export function registerCargoHandlers(): void {
   // Add more accionistas to an existing cargo
   ipcMain.handle('cargos:add-accionistas', (_e, cargoId: number, accionistaIds: number[]) => {
     const db = getDb()
-    const cargo = db.prepare('SELECT tarifa FROM cargos WHERE id = ?').get(cargoId) as { tarifa: number } | undefined
+    const cargo = db.prepare('SELECT tarifa, tipo_tarifa FROM cargos WHERE id = ?').get(cargoId) as { tarifa: number; tipo_tarifa: string } | undefined
     if (!cargo) return { success: false }
 
     const getAccionista = db.prepare(
@@ -146,8 +155,13 @@ export function registerCargoHandlers(): void {
 
     db.transaction(() => {
       for (const accionistaId of accionistaIds) {
-        const row = getAccionista.get(accionistaId) as { acciones: number; hectareas: number } | undefined
-        const monto = cargo.tarifa * ((row?.acciones ?? 0) + (row?.hectareas ?? 0))
+        let monto: number
+        if (cargo.tipo_tarifa === 'fija') {
+          monto = cargo.tarifa
+        } else {
+          const row = getAccionista.get(accionistaId) as { acciones: number; hectareas: number } | undefined
+          monto = cargo.tarifa * ((row?.acciones ?? 0) + (row?.hectareas ?? 0))
+        }
         insertCA.run({ cargo_id: cargoId, accionista_id: accionistaId, monto })
       }
     })()
@@ -171,6 +185,22 @@ export function registerCargoHandlers(): void {
     return { success: true }
   })
 
+  // Per-cargo summary for a temporada: total emitted and total collected (pagado=1)
+  ipcMain.handle('cargos:resumen-by-temporada', (_e, temporadaId: number) => {
+    return getDb()
+      .prepare(
+        `SELECT c.id, c.nombre,
+                COALESCE(SUM(ca.monto), 0) AS total_emitido,
+                COALESCE(SUM(CASE WHEN ca.pagado = 1 THEN ca.monto ELSE 0 END), 0) AS total_cobrado
+         FROM cargos c
+         LEFT JOIN cargo_accionistas ca ON ca.cargo_id = c.id
+         WHERE c.temporada_id = ?
+         GROUP BY c.id, c.nombre
+         ORDER BY c.nombre`
+      )
+      .all(temporadaId)
+  })
+
   // Delete a cargo header (cascades to cargo_accionistas)
   ipcMain.handle('cargos:delete', (_e, id: number) => {
     getDb().prepare('DELETE FROM cargos WHERE id = ?').run(id)
@@ -178,12 +208,14 @@ export function registerCargoHandlers(): void {
   })
 
   // List cargos assigned to a specific accionista in a specific temporada.
-  // Monto is recomputed live from current propiedades to avoid stale stored values.
+  // Proporcional: monto recomputed live from propiedades. Fija: use stored tarifa.
   ipcMain.handle('cargos:list-by-accionista', (_e, accionistaId: number, temporadaId: number) => {
     return getDb()
       .prepare(
-        `SELECT c.id, c.nombre, c.fecha, c.tarifa, c.notas, ca.pagado,
-                c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0)) AS monto
+        `SELECT c.id, c.nombre, c.fecha, c.tarifa, c.tipo_tarifa, c.notas, ca.pagado,
+                CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
+                     ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
+                END AS monto
          FROM cargo_accionistas ca
          JOIN cargos c ON c.id = ca.cargo_id
          LEFT JOIN (

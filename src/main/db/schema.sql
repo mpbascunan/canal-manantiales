@@ -92,3 +92,5 @@ CREATE TABLE IF NOT EXISTS deudores_config (
 -- v2: deduplicate propiedades by (accionista_id, LOWER(TRIM(numero)), tipo)
 -- v3: merge duplicate accionistas (same nombre) into a single canonical record
 -- v6: add fecha_multa and monto_multa_por_accion to temporadas
+-- v7: split accionista name; add numero_socio; add property address fields
+-- v8: add tipo_tarifa to cargos

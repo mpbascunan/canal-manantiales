@@ -46,7 +46,9 @@ export function registerDeudorHandlers(): void {
          ) abn ON abn.accionista_id = a.id
          LEFT JOIN (
                SELECT ca.accionista_id,
-                      SUM(c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))) AS total_cargos
+                      SUM(CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
+                               ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
+                          END) AS total_cargos
                FROM cargo_accionistas ca
                JOIN cargos c ON c.id = ca.cargo_id
                LEFT JOIN (
@@ -84,8 +86,16 @@ export function registerDeudorHandlers(): void {
     const cargos = db
       .prepare(
         `SELECT
-           COALESCE(SUM(c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))), 0) AS total_cargos,
-           COALESCE(SUM(CASE WHEN ca.pagado = 1 THEN c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0)) ELSE 0 END), 0) AS total_cargos_pagados
+           COALESCE(SUM(
+             CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
+                  ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
+             END
+           ), 0) AS total_cargos,
+           COALESCE(SUM(CASE WHEN ca.pagado = 1 THEN
+             CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
+                  ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
+             END
+           ELSE 0 END), 0) AS total_cargos_pagados
          FROM cargo_accionistas ca
          JOIN cargos c ON c.id = ca.cargo_id
          LEFT JOIN (

@@ -59,7 +59,8 @@ const api = {
     removeAccionista: (cargoId: number, accionistaId: number) => ipcRenderer.invoke('cargos:remove-accionista', cargoId, accionistaId),
     setPagado: (cargoId: number, accionistaId: number, pagado: boolean) => ipcRenderer.invoke('cargos:set-pagado', cargoId, accionistaId, pagado),
     delete: (id: number) => ipcRenderer.invoke('cargos:delete', id),
-    listByAccionista: (accionistaId: number, temporadaId: number) => ipcRenderer.invoke('cargos:list-by-accionista', accionistaId, temporadaId)
+    listByAccionista: (accionistaId: number, temporadaId: number) => ipcRenderer.invoke('cargos:list-by-accionista', accionistaId, temporadaId),
+    resumenByTemporada: (temporadaId: number) => ipcRenderer.invoke('cargos:resumen-by-temporada', temporadaId)
   },
   // Import
   import: {

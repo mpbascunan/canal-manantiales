@@ -5,9 +5,10 @@ import {
   calcularDeuda, calcularMultaVencimiento, tieneMultaVencimiento,
   formatCLP, formatFecha, formatNumber
 } from '../lib/formulas'
-import { exportAvisosCobro } from '../lib/export'
+import { exportAvisosCobro, previewAvisoCobro } from '../lib/export'
 import type { Accionista, Pago, Temporada, Propiedad, Abono, Cargo } from '../../../shared/types'
 import { nombreCompleto } from '../../../shared/types'
+import { AccionistaModal, type AccionistaEditForm } from '../components/AccionistaModal'
 
 const TIPO_LABELS: Record<string, string> = {
   PARCELA: 'Parcela', SITIO: 'Sitio', 'PEQUEÑO_PROPIETARIO': 'Pequeño Propietario'
@@ -38,6 +39,8 @@ export default function AccionistaDetalle() {
   const [cargos, setCargos] = useState<(Cargo & { monto: number; pagado: number })[]>([])
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [editForm, setEditForm] = useState<AccionistaEditForm | null>(null)
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
 
   const reload = () => {
     const aid = Number(id)
@@ -73,6 +76,41 @@ export default function AccionistaDetalle() {
     }
     setPendingDelete(null)
     setDeleting(false)
+    reload()
+  }
+
+  const openEdit = async () => {
+    if (!accionista) return
+    const props = await api.propiedades.list(accionista.id)
+    const propiedades = props.length > 0
+      ? props.map((p: any) => ({
+          id: p.id, numero: p.numero ?? '', tipo: p.tipo,
+          acciones: p.acciones, hectareas: p.hectareas,
+          direccion: p.direccion ?? '', sector: p.sector ?? '',
+          comuna: p.comuna ?? '', marco: p.marco ?? ''
+        }))
+      : [{ numero: accionista.numero ?? '', tipo: accionista.tipo, acciones: accionista.acciones, hectareas: accionista.hectareas, direccion: '', sector: '', comuna: '', marco: '' }]
+    setEditForm({
+      id: accionista.id, nombre: accionista.nombre,
+      apellido_paterno: accionista.apellido_paterno ?? '', apellido_materno: accionista.apellido_materno ?? '',
+      numero_socio: accionista.numero_socio ?? '', activo: accionista.activo, notas: accionista.notas ?? '', propiedades
+    })
+  }
+
+  const saveEdit = async () => {
+    if (!editForm) return
+    await api.accionistas.update({
+      id: editForm.id!, nombre: editForm.nombre,
+      apellido_paterno: editForm.apellido_paterno || null,
+      apellido_materno: editForm.apellido_materno || null,
+      numero_socio: editForm.numero_socio || null,
+      activo: editForm.activo, notas: editForm.notas || null,
+      propiedades: editForm.propiedades.map(p => ({
+        ...p, numero: p.numero || null, direccion: p.direccion || null,
+        sector: p.sector || null, comuna: p.comuna || null, marco: p.marco || null
+      }))
+    })
+    setEditForm(null)
     reload()
   }
 
@@ -117,7 +155,18 @@ export default function AccionistaDetalle() {
 
   const handlePrintAviso = () => {
     if (!temporada) return
-    exportAvisosCobro([accionista], temporada, temporada.valor_accion, multaVencimiento, propiedades)
+    const url = previewAvisoCobro([accionista], temporada, temporada.valor_accion, multaVencimiento, propiedades, cargos)
+    setPdfPreviewUrl(url)
+  }
+
+  const handleDownloadAviso = () => {
+    if (!temporada) return
+    exportAvisosCobro([accionista], temporada, temporada.valor_accion, multaVencimiento, propiedades, cargos)
+  }
+
+  const closePdfPreview = () => {
+    if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl)
+    setPdfPreviewUrl(null)
   }
 
   return (
@@ -154,6 +203,9 @@ export default function AccionistaDetalle() {
           {accionista.notas && <p className="text-xs text-gray-400 mt-2">{accionista.notas}</p>}
         </div>
         <div className="flex gap-2">
+          <button className="btn-secondary btn-sm" onClick={openEdit}>
+            Editar
+          </button>
           {temporada && (
             <button className="btn-secondary btn-sm" onClick={handlePrintAviso}>
               Imprimir aviso
@@ -379,6 +431,41 @@ export default function AccionistaDetalle() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Edit accionista modal */}
+      {editForm && (
+        <AccionistaModal
+          value={editForm}
+          isNew={false}
+          onChange={setEditForm}
+          onSave={saveEdit}
+          onClose={() => setEditForm(null)}
+        />
+      )}
+
+      {/* PDF preview modal */}
+      {pdfPreviewUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-white rounded-lg shadow-xl flex flex-col" style={{ width: '820px', height: '90vh' }}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
+              <h3 className="font-semibold text-gray-900 text-sm">Vista previa — Aviso de cobranza</h3>
+              <div className="flex items-center gap-2">
+                <button className="btn-secondary btn-sm" onClick={handleDownloadAviso}>
+                  Descargar PDF
+                </button>
+                <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={closePdfPreview}>
+                  ×
+                </button>
+              </div>
+            </div>
+            <iframe
+              src={pdfPreviewUrl}
+              title="Vista previa aviso de cobranza"
+              className="flex-1 w-full rounded-b-lg"
+            />
+          </div>
         </div>
       )}
 

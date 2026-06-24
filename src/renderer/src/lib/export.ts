@@ -170,27 +170,42 @@ const PROP_TIPO_LABELS: Record<AccionistaType, string> = {
   PEQUEÑO_PROPIETARIO: 'Propiedad pequeña'
 }
 
-export function exportAvisosCobro(accionistas: Accionista[], temporada: Temporada, valorAccion: number, multaVencimiento = 0, propiedades: Propiedad[] = []): void {
+export interface AvisoCargo {
+  nombre: string
+  monto: number
+  pagado: boolean | number
+}
+
+function buildAvisosCobroDoc(
+  accionistas: Accionista[],
+  temporada: Temporada,
+  valorAccion: number,
+  multaVencimiento = 0,
+  propiedades: Propiedad[] = [],
+  cargosAviso: AvisoCargo[] = []
+): jsPDF {
   const doc = newPdf()
 
   accionistas.forEach((a, i) => {
     if (i > 0) doc.addPage()
 
     const montoAcc = calcularMontoAcciones(valorAccion, a.acciones, a.hectareas, 1)
-    const total = montoAcc + multaVencimiento
+    const cargosPendientes = cargosAviso.filter(c => !c.pagado)
+    const totalCargos = cargosPendientes.reduce((s, c) => s + c.monto, 0)
+    const total = montoAcc + multaVencimiento + totalCargos
 
+    // ── Header ────────────────────────────────────────────────
     doc.setFontSize(12).setFont('helvetica', 'bold')
     doc.text(INSTITUTION, 105, 20, { align: 'center' })
     doc.setFontSize(11)
     doc.text(`AVISO DE COBRANZA — TEMPORADA ${temporada.nombre}`, 105, 28, { align: 'center' })
-
     doc.setDrawColor(7, 89, 133).setLineWidth(0.5)
     doc.line(14, 32, 196, 32)
 
     doc.setFontSize(10).setFont('helvetica', 'normal')
     doc.text(`Estimado/a: ${nombreCompleto(a)}`, 14, 42)
 
-    // Show property list with type labels
+    // ── Property list ─────────────────────────────────────────
     let propY = 49
     if (propiedades.length > 0) {
       propiedades.forEach((p, pi) => {
@@ -207,10 +222,9 @@ export function exportAvisosCobro(accionistas: Accionista[], temporada: Temporad
       }
     }
 
+    // ── Info fields ───────────────────────────────────────────
     doc.setFontSize(9)
     const info: [string, string][] = []
-    if (a.acciones > 0) info.push(['Acciones que posee:', formatNumber(a.acciones)])
-    if (a.hectareas > 0) info.push(['Hectáreas que posee:', formatNumber(a.hectareas)])
     info.push(['Valor acción:', formatCLP(valorAccion)])
     if (temporada.fecha_multa) info.push(['Fecha límite de pago:', formatFecha(temporada.fecha_multa)])
 
@@ -221,17 +235,53 @@ export function exportAvisosCobro(accionistas: Accionista[], temporada: Temporad
       y += 6
     }
 
-    const bodyRows: string[][] = [
-      [`Cuota por acciones (1 temporada)`, formatCLP(montoAcc)]
-    ]
+    // ── Table rows ────────────────────────────────────────────
+    const bodyRows: (string | { content: string; styles?: any })[][] = []
+
+    if (propiedades.length > 1) {
+      // Per-property breakdown
+      propiedades.forEach(p => {
+        const label = PROP_TIPO_LABELS[p.tipo]
+        const num = p.numero ? ` N° ${p.numero}` : ''
+        const propMonto = valorAccion * (p.acciones + p.hectareas)
+        const parts: string[] = []
+        if (p.acciones > 0) parts.push(`${formatNumber(p.acciones)} acc`)
+        if (p.hectareas > 0) parts.push(`${formatNumber(p.hectareas)} ha`)
+        bodyRows.push([`${label}${num}  (${parts.join(' + ')})`, formatCLP(propMonto)])
+      })
+      if (multaVencimiento > 0 || cargosAviso.length > 0) {
+        bodyRows.push([
+          { content: 'Subtotal cuota acciones', styles: { fontStyle: 'bold', fillColor: [248, 250, 252] } },
+          { content: formatCLP(montoAcc), styles: { fontStyle: 'bold', fillColor: [248, 250, 252], halign: 'right' } }
+        ])
+      }
+    } else {
+      bodyRows.push(['Cuota por acciones (1 temporada)', formatCLP(montoAcc)])
+    }
+
     if (multaVencimiento > 0) {
       bodyRows.push(['Multa por mora', formatCLP(multaVencimiento)])
+    }
+
+    // All cargos — pending first, then paid (grayed out)
+    for (const c of cargosAviso) {
+      if (!c.pagado) {
+        bodyRows.push([c.nombre, formatCLP(c.monto)])
+      }
+    }
+    for (const c of cargosAviso) {
+      if (c.pagado) {
+        bodyRows.push([
+          { content: `${c.nombre}  (Pagado)`, styles: { textColor: [180, 180, 180] } },
+          { content: formatCLP(c.monto), styles: { textColor: [180, 180, 180], halign: 'right' } }
+        ])
+      }
     }
 
     autoTable(doc, {
       startY: y + 4,
       head: [['Concepto', 'Monto']],
-      body: bodyRows,
+      body: bodyRows as any,
       foot: [['TOTAL A PAGAR', formatCLP(total)]],
       styles: { fontSize: 9 },
       headStyles: { fillColor: [7, 89, 133] },
@@ -247,6 +297,30 @@ export function exportAvisosCobro(accionistas: Accionista[], temporada: Temporad
     }
   })
 
+  return doc
+}
+
+export function previewAvisoCobro(
+  accionistas: Accionista[],
+  temporada: Temporada,
+  valorAccion: number,
+  multaVencimiento = 0,
+  propiedades: Propiedad[] = [],
+  cargosAviso: AvisoCargo[] = []
+): string {
+  const doc = buildAvisosCobroDoc(accionistas, temporada, valorAccion, multaVencimiento, propiedades, cargosAviso)
+  return doc.output('bloburl') as string
+}
+
+export function exportAvisosCobro(
+  accionistas: Accionista[],
+  temporada: Temporada,
+  valorAccion: number,
+  multaVencimiento = 0,
+  propiedades: Propiedad[] = [],
+  cargosAviso: AvisoCargo[] = []
+): void {
+  const doc = buildAvisosCobroDoc(accionistas, temporada, valorAccion, multaVencimiento, propiedades, cargosAviso)
   const filename = accionistas.length === 1
     ? `Aviso_${nombreCompleto(accionistas[0]).replace(/\s+/g, '_')}.pdf`
     : `Avisos_Cobranza_${temporada.nombre}.pdf`

@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS cargos (
   nombre       TEXT    NOT NULL,
   temporada_id INTEGER NOT NULL REFERENCES temporadas(id),
   tarifa       REAL    NOT NULL DEFAULT 0,
+  tipo_tarifa  TEXT    NOT NULL DEFAULT 'proporcional',
   fecha        TEXT    NOT NULL,
   notas        TEXT,
   created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -306,6 +307,14 @@ function runMigrations(database: Database.Database): void {
       database.prepare('UPDATE abonos SET numero_ingreso = 0').run()
     })()
     database.pragma('user_version = 7')
+  }
+
+  if (version < 8) {
+    // v8: Add tipo_tarifa to cargos — 'proporcional' (default) or 'fija'.
+    database.transaction(() => {
+      database.prepare("ALTER TABLE cargos ADD COLUMN tipo_tarifa TEXT NOT NULL DEFAULT 'proporcional'").run()
+    })()
+    database.pragma('user_version = 8')
   }
 }
 

@@ -20,8 +20,6 @@ export interface Propiedad {
   acciones: number
   hectareas: number
   direccion: string | null
-  sector: string | null
-  comuna: string | null
   marco: string | null
 }
 
@@ -32,8 +30,6 @@ export interface PropiedadInput {
   acciones: number
   hectareas: number
   direccion?: string | null
-  sector?: string | null
-  comuna?: string | null
   marco?: string | null
 }
 
@@ -76,8 +72,6 @@ export interface Pago {
   temporadas_pagadas: number
   monto_acciones: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total: number
   notas: string | null
   created_at: string
@@ -95,8 +89,6 @@ export interface PagoInput {
   temporadas_pagadas: number
   monto_acciones: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total: number
   notas?: string
 }
@@ -110,8 +102,6 @@ export interface Abono {
   temporadas_cubiertas: number
   monto: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total: number
   notas: string | null
   created_at: string
@@ -127,8 +117,6 @@ export interface AbonoInput {
   fecha: string
   monto: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total: number
   notas?: string
 }
@@ -137,14 +125,10 @@ export interface DeudorConfig {
   accionista_id: number
   temporada_id: number
   temporadas_adeudadas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
 }
 
 export interface Deudor extends Accionista {
   temporadas_adeudadas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total_abonado: number   // SUM of abonos for this accionista+temporada
   total_cargos: number    // SUM of cargo_accionistas.monto for this accionista+temporada
   monto_adeudado: number
@@ -155,8 +139,6 @@ export interface Deudor extends Accionista {
 export interface ResumenContable {
   monto_acciones: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total: number
 }
 

@@ -137,8 +137,8 @@ export function registerImportHandlers(): void {
          AND tipo = ?`
     )
     const insertAccionista = db.prepare(
-      `INSERT INTO accionistas (numero, nombre, tipo, activo)
-       VALUES (@numero, @nombre, @tipo, 1)`
+      `INSERT INTO accionistas (nombre, activo)
+       VALUES (@nombre, 1)`
     )
     const insertPropiedad = db.prepare(
       `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas)
@@ -167,11 +167,7 @@ export function registerImportHandlers(): void {
             propImported++
           } else {
             // New accionista + first propiedad
-            const r = insertAccionista.run({
-              numero: row.numero ?? null,
-              nombre: name,
-              tipo: row.tipo
-            })
+            const r = insertAccionista.run({ nombre: name })
             insertPropiedad.run(
               r.lastInsertRowid,
               row.numero ?? null,
@@ -201,10 +197,10 @@ export function registerImportHandlers(): void {
     const insert = db.prepare(
       `INSERT INTO pagos
        (numero_ingreso, accionista_id, temporada_id, fecha, temporadas_pagadas,
-        monto_acciones, multas, cuota_extraordinaria, otros_ingresos, total)
+        monto_acciones, multas, total)
        VALUES
        (@numero_ingreso, @accionista_id, @temporada_id, @fecha, @temporadas_pagadas,
-        @monto_acciones, @multas, @cuota_extraordinaria, @otros_ingresos, @total)`
+        @monto_acciones, @multas, @total)`
     )
 
     db.transaction(() => {
@@ -230,8 +226,6 @@ export function registerImportHandlers(): void {
             temporadas_pagadas: row.temporadas_pagadas ?? 1,
             monto_acciones: Number(row.monto_acciones ?? 0),
             multas: Number(row.multas ?? 0),
-            cuota_extraordinaria: Number(row.cuota_extraordinaria ?? 0),
-            otros_ingresos: Number(row.otros_ingresos ?? 0),
             total: Number(row.total ?? 0)
           })
           imported++

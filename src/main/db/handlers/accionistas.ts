@@ -23,9 +23,9 @@ const ACCIONISTA_COLS = `
   a.id, a.nombre, a.apellido_paterno, a.apellido_materno, a.numero_socio, a.activo, a.notas,
   COALESCE(pt.total_acciones, 0)   AS acciones,
   COALESCE(pt.total_hectareas, 0) AS hectareas,
-  COALESCE(pf.tipo, a.tipo)                 AS tipo,
-  COALESCE(pf.numero, a.numero)             AS numero,
-  COALESCE(pt.numeros, a.numero)            AS numeros
+  pf.tipo                          AS tipo,
+  pf.numero                        AS numero,
+  pt.numeros                       AS numeros
 `
 
 const SELECT_BASE = `SELECT ${ACCIONISTA_COLS} FROM accionistas a ${PROPS_AGG}`
@@ -47,30 +47,27 @@ export function registerAccionistaHandlers(): void {
   ipcMain.handle('accionistas:create', (_e, input: AccionistaInput) => {
     const db = getDb()
     const props = input.propiedades ?? []
-    const primary = props[0]
 
     const id = db.transaction(() => {
       const r = db
         .prepare(
-          `INSERT INTO accionistas (nombre, apellido_paterno, apellido_materno, numero_socio, tipo, numero, activo, notas)
-           VALUES (@nombre, @apellido_paterno, @apellido_materno, @numero_socio, @tipo, @numero, @activo, @notas)`
+          `INSERT INTO accionistas (nombre, apellido_paterno, apellido_materno, numero_socio, activo, notas)
+           VALUES (@nombre, @apellido_paterno, @apellido_materno, @numero_socio, @activo, @notas)`
         )
         .run({
           nombre: input.nombre,
           apellido_paterno: input.apellido_paterno ?? null,
           apellido_materno: input.apellido_materno ?? null,
           numero_socio: input.numero_socio ?? null,
-          tipo: primary?.tipo ?? 'PARCELA',
-          numero: primary?.numero ?? null,
           activo: input.activo ? 1 : 0,
           notas: input.notas ?? null
         })
       const newId = r.lastInsertRowid as number
       for (const p of props) {
         db.prepare(
-          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas, direccion, sector, comuna, marco)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(newId, p.numero ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.sector ?? null, p.comuna ?? null, p.marco ?? null)
+          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas, direccion, marco)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(newId, p.numero ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.marco ?? null)
       }
       return newId
     })()
@@ -81,12 +78,11 @@ export function registerAccionistaHandlers(): void {
   ipcMain.handle('accionistas:update', (_e, input: AccionistaInput & { id: number }) => {
     const db = getDb()
     const props = input.propiedades ?? []
-    const primary = props[0]
 
     db.transaction(() => {
       db.prepare(
         `UPDATE accionistas SET nombre=@nombre, apellido_paterno=@apellido_paterno, apellido_materno=@apellido_materno,
-         numero_socio=@numero_socio, tipo=@tipo, numero=@numero, activo=@activo, notas=@notas
+         numero_socio=@numero_socio, activo=@activo, notas=@notas
          WHERE id=@id`
       ).run({
         id: input.id,
@@ -94,17 +90,15 @@ export function registerAccionistaHandlers(): void {
         apellido_paterno: input.apellido_paterno ?? null,
         apellido_materno: input.apellido_materno ?? null,
         numero_socio: input.numero_socio ?? null,
-        tipo: primary?.tipo ?? 'PARCELA',
-        numero: primary?.numero ?? null,
         activo: input.activo ? 1 : 0,
         notas: input.notas ?? null
       })
       db.prepare('DELETE FROM propiedades WHERE accionista_id = ?').run(input.id)
       for (const p of props) {
         db.prepare(
-          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas, direccion, sector, comuna, marco)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(input.id, p.numero ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.sector ?? null, p.comuna ?? null, p.marco ?? null)
+          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas, direccion, marco)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(input.id, p.numero ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.marco ?? null)
       }
     })()
 
@@ -123,13 +117,16 @@ export function registerAccionistaHandlers(): void {
                   WHERE ab.accionista_id = a.id AND ab.temporada_id = ?
                 ), 0) AS total_abonado,
                 COALESCE(dc.temporadas_adeudadas, 1)  AS dc_temporadas_adeudadas,
-                COALESCE(dc.cuota_extraordinaria, 0)  AS dc_cuota_extraordinaria,
-                COALESCE(dc.otros_ingresos, 0)        AS dc_otros_ingresos
+                CASE WHEN EXISTS(
+                  SELECT 1 FROM cargo_accionistas ca
+                  JOIN cargos c ON c.id = ca.cargo_id
+                  WHERE ca.accionista_id = a.id AND c.temporada_id = ? AND ca.pagado = 0
+                ) THEN 1 ELSE 0 END AS has_unpaid_cargos
          FROM accionistas a
          ${PROPS_AGG}
          LEFT JOIN deudores_config dc ON dc.accionista_id = a.id AND dc.temporada_id = ?
          WHERE a.activo = 1 ORDER BY a.nombre`
       )
-      .all(temporadaId, temporadaId, temporadaId)
+      .all(temporadaId, temporadaId, temporadaId, temporadaId)
   })
 }

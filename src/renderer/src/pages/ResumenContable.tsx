@@ -4,8 +4,6 @@ import { formatCLP, mesNombre } from '../lib/formulas'
 import { exportResumenContable, exportResumenContablePdf } from '../lib/export'
 import type { Temporada, ResumenContable as IResumen, ResumenMensual, CargoResumen } from '../../../shared/types'
 
-const NOMBRE_CUOTA_EXTRA = 'Cuota extraordinaria'
-
 export default function ResumenContable() {
   const [temporadas, setTemporadas] = useState<Temporada[]>([])
   const [selectedId, setSelectedId] = useState<number>(0)
@@ -36,27 +34,24 @@ export default function ResumenContable() {
 
   const temporada = temporadas.find(t => t.id === selectedId)
 
-  // Cuota extraordinaria = from pagos/abonos + collected from cargo named "Cuota extraordinaria"
-  const cuotaExtraCargo = cargoResumen.find(c => c.nombre === NOMBRE_CUOTA_EXTRA)
-  const cuotaExtraTotal = (resumen?.cuota_extraordinaria ?? 0) + (cuotaExtraCargo?.total_cobrado ?? 0)
+  // Cargos named "Multa..." count as multa income; the rest get their own row
+  const multaCargos = cargoResumen.filter(c => /multa/i.test(c.nombre))
+  const otrosCargos = cargoResumen.filter(c => !/multa/i.test(c.nombre))
+  const ingresoMultas = (resumen?.multas ?? 0)
+    + multaCargos.reduce((s, c) => s + c.total_cobrado, 0)
 
-  // Other cargos (excluding "Cuota extraordinaria" which is merged above)
-  const otrosCargos = cargoResumen.filter(c => c.nombre !== NOMBRE_CUOTA_EXTRA)
-  const otrosCargosTotal = otrosCargos.reduce((s, c) => s + c.total_cobrado, 0)
-
-  // Grand total = pagos/abonos total + cuota_extra cargo cobrado + otros cargos cobrados
+  // Grand total = pagos/abonos total + all cargo cobrado
   const totalConCargos = (resumen?.total ?? 0)
-    + (cuotaExtraCargo?.total_cobrado ?? 0)
-    + otrosCargosTotal
+    + cargoResumen.reduce((s, c) => s + c.total_cobrado, 0)
 
   const handleExcelExport = () => {
     if (!resumen || !temporada) return
-    exportResumenContable(resumen, mensual, temporada)
+    exportResumenContable(resumen, mensual, temporada, cargoResumen)
   }
 
   const handlePdfExport = () => {
     if (!resumen || !temporada) return
-    exportResumenContablePdf(resumen, mensual, temporada)
+    exportResumenContablePdf(resumen, mensual, temporada, cargoResumen)
   }
 
   return (
@@ -93,22 +88,7 @@ export default function ResumenContable() {
                 </tr>
                 <tr className="table-row">
                   <td className="px-4 py-3">Ingresos por Multas</td>
-                  <td className="px-4 py-3 text-right tabular-nums font-medium">{formatCLP(resumen.multas)}</td>
-                </tr>
-                <tr className="table-row">
-                  <td className="px-4 py-3">
-                    Cuota Extraordinaria
-                    {cuotaExtraCargo && cuotaExtraCargo.total_cobrado > 0 && (
-                      <span className="ml-2 text-xs text-indigo-600 font-normal">
-                        (incl. cargo: {formatCLP(cuotaExtraCargo.total_cobrado)})
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums font-medium">{formatCLP(cuotaExtraTotal)}</td>
-                </tr>
-                <tr className="table-row">
-                  <td className="px-4 py-3">Otros Ingresos</td>
-                  <td className="px-4 py-3 text-right tabular-nums font-medium">{formatCLP(resumen.otros_ingresos)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums font-medium">{formatCLP(ingresoMultas)}</td>
                 </tr>
                 {otrosCargos.map(c => (
                   <tr key={c.id} className="table-row">
@@ -147,12 +127,7 @@ export default function ResumenContable() {
                 <tbody>
                   {cargoResumen.map(c => (
                     <tr key={c.id} className="table-row">
-                      <td className="px-4 py-2 font-medium">
-                        {c.nombre}
-                        {c.nombre === NOMBRE_CUOTA_EXTRA && (
-                          <span className="ml-2 text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">Cuota Extra.</span>
-                        )}
-                      </td>
+                      <td className="px-4 py-2 font-medium">{c.nombre}</td>
                       <td className="px-4 py-2 text-right tabular-nums text-gray-600">{formatCLP(c.total_emitido)}</td>
                       <td className="px-4 py-2 text-right tabular-nums text-green-700 font-medium">{formatCLP(c.total_cobrado)}</td>
                       <td className="px-4 py-2 text-right tabular-nums">
@@ -188,8 +163,6 @@ export default function ResumenContable() {
                     <th className="px-4 py-2 text-left">Mes</th>
                     <th className="px-4 py-2 text-right">Monto Acc.</th>
                     <th className="px-4 py-2 text-right">Multas</th>
-                    <th className="px-4 py-2 text-right">Cuota Extra.</th>
-                    <th className="px-4 py-2 text-right">Otros</th>
                     <th className="px-4 py-2 text-right">Total</th>
                   </tr>
                 </thead>
@@ -199,8 +172,6 @@ export default function ResumenContable() {
                       <td className="px-4 py-2 font-medium">{mesNombre(m.mes)} {m.anio}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{formatCLP(m.monto_acciones)}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{m.multas > 0 ? formatCLP(m.multas) : '—'}</td>
-                      <td className="px-4 py-2 text-right tabular-nums">{m.cuota_extraordinaria > 0 ? formatCLP(m.cuota_extraordinaria) : '—'}</td>
-                      <td className="px-4 py-2 text-right tabular-nums">{m.otros_ingresos > 0 ? formatCLP(m.otros_ingresos) : '—'}</td>
                       <td className="px-4 py-2 text-right tabular-nums font-semibold">{formatCLP(m.total)}</td>
                     </tr>
                   ))}
@@ -210,8 +181,6 @@ export default function ResumenContable() {
                     <td className="px-4 py-2">TOTALES</td>
                     <td className="px-4 py-2 text-right tabular-nums">{formatCLP(resumen.monto_acciones)}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{formatCLP(resumen.multas)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{formatCLP(resumen.cuota_extraordinaria)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{formatCLP(resumen.otros_ingresos)}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{formatCLP(resumen.total)}</td>
                   </tr>
                 </tfoot>

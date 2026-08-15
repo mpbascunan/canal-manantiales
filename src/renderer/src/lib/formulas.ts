@@ -37,11 +37,9 @@ export function calcularMultaVencimiento(
 
 export function calcularTotal(
   montoAcciones: number,
-  multas: number,
-  cuotaExtraordinaria: number,
-  otrosIngresos: number
+  multas: number
 ): number {
-  return montoAcciones + multas + cuotaExtraordinaria + otrosIngresos
+  return montoAcciones + multas
 }
 
 export interface DeudaParams {
@@ -49,8 +47,6 @@ export interface DeudaParams {
   acciones: number
   hectareas: number
   temporadasAdeudadas: number
-  cuotaExtraordinaria: number
-  otrosIngresos: number
   totalAbonado: number
   totalCargos: number
   totalCargosPagados: number
@@ -61,8 +57,6 @@ export interface DeudaParams {
 export interface DeudaBreakdown {
   monto_acciones: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   subtotal: number           // base debt without cargos
   total_cargos: number
   total_cargos_pendientes: number
@@ -74,15 +68,13 @@ export interface DeudaBreakdown {
 export function calcularDeuda(p: DeudaParams): DeudaBreakdown {
   const monto_acciones = calcularMontoAcciones(p.valorAccion, p.acciones, p.hectareas, p.temporadasAdeudadas)
   const multas = calcularMultas(p.acciones, p.hectareas, p.temporadasAdeudadas, p.montoPorAccion) + p.multaVencimiento
-  const subtotal = calcularTotal(monto_acciones, multas, p.cuotaExtraordinaria, p.otrosIngresos)
+  const subtotal = calcularTotal(monto_acciones, multas)
   const total_cargos_pendientes = p.totalCargos - p.totalCargosPagados
   const total = subtotal + p.totalCargos
   const pendiente = Math.max(0, subtotal - p.totalAbonado) + total_cargos_pendientes
   return {
     monto_acciones,
     multas,
-    cuota_extraordinaria: p.cuotaExtraordinaria,
-    otros_ingresos: p.otrosIngresos,
     subtotal,
     total_cargos: p.totalCargos,
     total_cargos_pendientes,

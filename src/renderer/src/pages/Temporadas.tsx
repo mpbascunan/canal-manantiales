@@ -39,7 +39,7 @@ export default function Temporadas() {
   }
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Temporadas</h1>
         <button className="btn-primary" onClick={() => { setEditing({ ...EMPTY }); setIsNew(true) }}>

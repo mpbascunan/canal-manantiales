@@ -3,11 +3,13 @@ import { getDb } from '../connection'
 import type { PagoInput } from '../../../shared/types'
 
 const JOIN_SQL = `
-  SELECT p.*, a.nombre AS accionista_nombre, a.tipo AS accionista_tipo,
+  SELECT p.*, a.nombre AS accionista_nombre, pf.tipo AS accionista_tipo,
          t.nombre AS temporada_nombre
   FROM pagos p
   JOIN accionistas a ON a.id = p.accionista_id
   JOIN temporadas t ON t.id = p.temporada_id
+  LEFT JOIN propiedades pf ON pf.accionista_id = a.id
+         AND pf.id = (SELECT MIN(id) FROM propiedades WHERE accionista_id = a.id)
 `
 
 export function registerPagoHandlers(): void {
@@ -42,10 +44,10 @@ export function registerPagoHandlers(): void {
     const insertPago = db.prepare(
       `INSERT INTO pagos
        (numero_ingreso, accionista_id, temporada_id, fecha, temporadas_pagadas,
-        monto_acciones, multas, cuota_extraordinaria, otros_ingresos, total, notas)
+        monto_acciones, multas, total, notas)
        VALUES
        (@numero_ingreso, @accionista_id, @temporada_id, @fecha, @temporadas_pagadas,
-        @monto_acciones, @multas, @cuota_extraordinaria, @otros_ingresos, @total, @notas)`
+        @monto_acciones, @multas, @total, @notas)`
     )
     const markCargosPaid = db.prepare(
       `UPDATE cargo_accionistas SET pagado = 1
@@ -71,16 +73,14 @@ export function registerPagoHandlers(): void {
     return getDb()
       .prepare(
         `SELECT
-           COALESCE(SUM(monto_acciones), 0)       AS monto_acciones,
-           COALESCE(SUM(multas), 0)               AS multas,
-           COALESCE(SUM(cuota_extraordinaria), 0) AS cuota_extraordinaria,
-           COALESCE(SUM(otros_ingresos), 0)       AS otros_ingresos,
-           COALESCE(SUM(total), 0)                AS total
+           COALESCE(SUM(monto_acciones), 0) AS monto_acciones,
+           COALESCE(SUM(multas), 0)         AS multas,
+           COALESCE(SUM(total), 0)          AS total
          FROM (
-           SELECT monto_acciones, multas, cuota_extraordinaria, otros_ingresos, total
+           SELECT monto_acciones, multas, total
            FROM pagos WHERE temporada_id = ?
            UNION ALL
-           SELECT monto AS monto_acciones, multas, cuota_extraordinaria, otros_ingresos, total
+           SELECT monto AS monto_acciones, multas, total
            FROM abonos WHERE temporada_id = ?
          )`
       )
@@ -93,16 +93,14 @@ export function registerPagoHandlers(): void {
         `SELECT
            strftime('%m', fecha) AS mes,
            strftime('%Y', fecha) AS anio,
-           COALESCE(SUM(monto_acciones), 0)       AS monto_acciones,
-           COALESCE(SUM(multas), 0)               AS multas,
-           COALESCE(SUM(cuota_extraordinaria), 0) AS cuota_extraordinaria,
-           COALESCE(SUM(otros_ingresos), 0)       AS otros_ingresos,
-           COALESCE(SUM(total), 0)                AS total
+           COALESCE(SUM(monto_acciones), 0) AS monto_acciones,
+           COALESCE(SUM(multas), 0)         AS multas,
+           COALESCE(SUM(total), 0)          AS total
          FROM (
-           SELECT fecha, monto_acciones, multas, cuota_extraordinaria, otros_ingresos, total
+           SELECT fecha, monto_acciones, multas, total
            FROM pagos WHERE temporada_id = ?
            UNION ALL
-           SELECT fecha, monto AS monto_acciones, multas, cuota_extraordinaria, otros_ingresos, total
+           SELECT fecha, monto AS monto_acciones, multas, total
            FROM abonos WHERE temporada_id = ?
          )
          GROUP BY strftime('%Y-%m', fecha)

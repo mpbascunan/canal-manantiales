@@ -14,14 +14,8 @@ const TIPO_LABELS: Record<string, string> = {
   PARCELA: 'Parcela', SITIO: 'Sitio', 'PEQUEÑO_PROPIETARIO': 'Pequeño Propietario'
 }
 
-type PendingDelete =
-  | { type: 'pago';  item: Pago }
-  | { type: 'abono'; item: Abono }
-
 interface DeudorConfig {
   temporadas_adeudadas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total_abonado: number
   total_cargos: number
   total_cargos_pagados: number
@@ -37,8 +31,6 @@ export default function AccionistaDetalle() {
   const [temporada, setTemporada] = useState<Temporada | null>(null)
   const [deudorConfig, setDeudorConfig] = useState<DeudorConfig | null>(null)
   const [cargos, setCargos] = useState<(Cargo & { monto: number; pagado: number })[]>([])
-  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
-  const [deleting, setDeleting] = useState(false)
   const [editForm, setEditForm] = useState<AccionistaEditForm | null>(null)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
 
@@ -66,19 +58,6 @@ export default function AccionistaDetalle() {
 
   useEffect(() => { reload() }, [id])
 
-  const confirmDelete = async () => {
-    if (!pendingDelete) return
-    setDeleting(true)
-    if (pendingDelete.type === 'pago') {
-      await api.pagos.delete(pendingDelete.item.id)
-    } else {
-      await api.abonos.delete(pendingDelete.item.id)
-    }
-    setPendingDelete(null)
-    setDeleting(false)
-    reload()
-  }
-
   const openEdit = async () => {
     if (!accionista) return
     const props = await api.propiedades.list(accionista.id)
@@ -86,10 +65,9 @@ export default function AccionistaDetalle() {
       ? props.map((p: any) => ({
           id: p.id, numero: p.numero ?? '', tipo: p.tipo,
           acciones: p.acciones, hectareas: p.hectareas,
-          direccion: p.direccion ?? '', sector: p.sector ?? '',
-          comuna: p.comuna ?? '', marco: p.marco ?? ''
+          direccion: p.direccion ?? '', marco: p.marco ?? ''
         }))
-      : [{ numero: accionista.numero ?? '', tipo: accionista.tipo, acciones: accionista.acciones, hectareas: accionista.hectareas, direccion: '', sector: '', comuna: '', marco: '' }]
+      : [{ numero: accionista.numero ?? '', tipo: accionista.tipo, acciones: accionista.acciones, hectareas: accionista.hectareas, direccion: '', marco: '' }]
     setEditForm({
       id: accionista.id, nombre: accionista.nombre,
       apellido_paterno: accionista.apellido_paterno ?? '', apellido_materno: accionista.apellido_materno ?? '',
@@ -107,7 +85,7 @@ export default function AccionistaDetalle() {
       activo: editForm.activo, notas: editForm.notas || null,
       propiedades: editForm.propiedades.map(p => ({
         ...p, numero: p.numero || null, direccion: p.direccion || null,
-        sector: p.sector || null, comuna: p.comuna || null, marco: p.marco || null
+        marco: p.marco || null
       }))
     })
     setEditForm(null)
@@ -116,19 +94,20 @@ export default function AccionistaDetalle() {
 
   if (!accionista) return <div className="text-gray-400 p-8">Cargando...</div>
 
-  const totalAcc    = pagos.reduce((s, p) => s + p.monto_acciones, 0) + abonos.reduce((s, a) => s + a.monto, 0)
-  const totalMultas = pagos.reduce((s, p) => s + p.multas, 0)         + abonos.reduce((s, a) => s + a.multas, 0)
-  const totalCuota  = pagos.reduce((s, p) => s + p.cuota_extraordinaria, 0) + abonos.reduce((s, a) => s + a.cuota_extraordinaria, 0)
-  const totalOtros  = pagos.reduce((s, p) => s + p.otros_ingresos, 0) + abonos.reduce((s, a) => s + a.otros_ingresos, 0)
-  const grandTotal  = pagos.reduce((s, p) => s + p.total, 0)          + abonos.reduce((s, a) => s + a.total, 0)
-
-  // Debt status for active temporada
-  const hasPaidThisSeason = temporada
-    ? pagos.some(p => p.temporada_id === temporada.id)
-    : false
+  const totalAcc   = pagos.reduce((s, p) => s + p.monto_acciones, 0) + abonos.reduce((s, a) => s + a.monto, 0)
+  const grandTotal = pagos.reduce((s, p) => s + p.total, 0)          + abonos.reduce((s, a) => s + a.total, 0)
 
   const totalCargos        = cargos.reduce((s, c) => s + c.monto, 0)
   const totalCargosPagados = cargos.filter(c => c.pagado).reduce((s, c) => s + c.monto, 0)
+  const unpaidCargosAmount = totalCargos - totalCargosPagados
+
+  // Full payment registered for the active season
+  const hasFullPaymentThisSeason = temporada
+    ? pagos.some(p => p.temporada_id === temporada.id)
+    : false
+
+  // "Paid" only when full payment exists AND no cargos added after it remain unpaid
+  const hasPaidThisSeason = hasFullPaymentThisSeason && unpaidCargosAmount === 0
 
   const multaVencimiento = (temporada && accionista && deudorConfig && tieneMultaVencimiento(temporada))
     ? calcularMultaVencimiento(accionista.acciones, accionista.hectareas, temporada.monto_multa_por_accion, temporada.valor_accion, deudorConfig.total_abonado)
@@ -140,8 +119,6 @@ export default function AccionistaDetalle() {
         acciones:             accionista.acciones,
         hectareas:            accionista.hectareas,
         temporadasAdeudadas:  deudorConfig.temporadas_adeudadas,
-        cuotaExtraordinaria:  deudorConfig.cuota_extraordinaria,
-        otrosIngresos:        deudorConfig.otros_ingresos,
         totalAbonado:         deudorConfig.total_abonado,
         totalCargos,
         totalCargosPagados,
@@ -150,8 +127,8 @@ export default function AccionistaDetalle() {
       })
     : null
 
-  const debtTotal     = deuda?.total ?? 0
-  const debtPendiente = deuda?.pendiente ?? 0
+  const debtPendiente    = deuda?.pendiente ?? 0
+  const multasAnteriores = deuda ? deuda.multas - multaVencimiento : 0
 
   const handlePrintAviso = () => {
     if (!temporada) return
@@ -180,12 +157,11 @@ export default function AccionistaDetalle() {
       {/* Header card */}
       <div className="card p-5 flex items-start justify-between">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="badge-blue">{TIPO_LABELS[accionista.tipo]}</span>
-            {accionista.numeros && (
+          {accionista.numeros && (
+            <div className="mb-1">
               <span className="text-gray-400 text-sm">N° {accionista.numeros}</span>
-            )}
-          </div>
+            </div>
+          )}
           <h1 className="text-xl font-bold text-gray-900">{nombreCompleto(accionista)}</h1>
           {accionista.numero_socio && (
             <p className="text-xs text-gray-400 mt-0.5">N° socio: {accionista.numero_socio}</p>
@@ -219,10 +195,10 @@ export default function AccionistaDetalle() {
 
       {/* Active season debt status */}
       {temporada && deudorConfig && (
-        <div className={`card p-4 flex items-center justify-between ${
+        <div className={`card p-4 flex items-start justify-between gap-6 ${
           hasPaidThisSeason
             ? 'border-green-200 bg-green-50'
-            : debtPendiente > 0
+            : (hasFullPaymentThisSeason && unpaidCargosAmount > 0) || debtPendiente > 0
               ? 'border-amber-200 bg-amber-50'
               : 'border-gray-200'
         }`}>
@@ -233,24 +209,48 @@ export default function AccionistaDetalle() {
 
           {hasPaidThisSeason ? (
             <span className="text-green-700 font-semibold text-sm">✓ Pagado</span>
-          ) : debtPendiente > 0 ? (
+          ) : hasFullPaymentThisSeason && unpaidCargosAmount > 0 ? (
             <div className="text-right text-sm">
               <div className="text-amber-700 font-semibold">
-                Deuda pendiente: {formatCLP(debtPendiente)}
+                Cargos pendientes: {formatCLP(unpaidCargosAmount)}
               </div>
-              {deudorConfig.total_abonado > 0 && (
-                <div className="text-xs text-gray-500">
-                  Total: {formatCLP(debtTotal)} · Abonado: {formatCLP(deudorConfig.total_abonado)}
-                </div>
-              )}
-              <div className="text-xs text-gray-400">
-                {deudorConfig.temporadas_adeudadas} temporada{deudorConfig.temporadas_adeudadas !== 1 ? 's' : ''} adeudada{deudorConfig.temporadas_adeudadas !== 1 ? 's' : ''}
+              <div className="text-xs text-gray-500">Cuota de temporada pagada</div>
+            </div>
+          ) : debtPendiente > 0 && deuda ? (
+            <div className="text-sm shrink-0">
+              <div className="text-amber-700 font-semibold text-right mb-2">
+                Pendiente: {formatCLP(debtPendiente)}
               </div>
-              {multaVencimiento > 0 && temporada?.fecha_multa && (
-                <div className="text-xs text-orange-600 mt-0.5">
-                  Incluye multa por vencimiento ({formatCLP(multaVencimiento)}) · límite {formatFecha(temporada.fecha_multa)}
+              <div className="text-xs space-y-0.5 min-w-[260px]">
+                <div className="flex justify-between gap-8 text-gray-500">
+                  <span>Cuota de acciones ({deudorConfig.temporadas_adeudadas} temp.)</span>
+                  <span className="tabular-nums">{formatCLP(deuda.monto_acciones)}</span>
                 </div>
-              )}
+                {multasAnteriores > 0 && (
+                  <div className="flex justify-between gap-8 text-gray-500">
+                    <span>Multas por atraso ({deudorConfig.temporadas_adeudadas - 1} temp.)</span>
+                    <span className="tabular-nums">{formatCLP(multasAnteriores)}</span>
+                  </div>
+                )}
+                {multaVencimiento > 0 && (
+                  <div className="flex justify-between gap-8 text-orange-600">
+                    <span>Multa por vencimiento</span>
+                    <span className="tabular-nums">{formatCLP(multaVencimiento)}</span>
+                  </div>
+                )}
+                {deuda.total_cargos_pendientes > 0 && (
+                  <div className="flex justify-between gap-8 text-gray-500">
+                    <span>Cargos pendientes</span>
+                    <span className="tabular-nums">{formatCLP(deuda.total_cargos_pendientes)}</span>
+                  </div>
+                )}
+                {deudorConfig.total_abonado > 0 && (
+                  <div className="flex justify-between gap-8 text-green-700">
+                    <span>Abonado</span>
+                    <span className="tabular-nums">−{formatCLP(deudorConfig.total_abonado)}</span>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <span className="text-gray-400 text-sm">Sin deuda registrada</span>
@@ -270,8 +270,6 @@ export default function AccionistaDetalle() {
                 <th className="px-4 py-2 text-left">N°</th>
                 <th className="px-4 py-2 text-left">Tipo</th>
                 <th className="px-4 py-2 text-left">Dirección</th>
-                <th className="px-4 py-2 text-left">Sector</th>
-                <th className="px-4 py-2 text-left">Comuna</th>
                 <th className="px-4 py-2 text-left">Marco</th>
                 <th className="px-4 py-2 text-right">Acciones</th>
                 <th className="px-4 py-2 text-right">Hectáreas</th>
@@ -283,8 +281,6 @@ export default function AccionistaDetalle() {
                   <td className="px-4 py-2 text-gray-500">{p.numero ?? '—'}</td>
                   <td className="px-4 py-2">{TIPO_LABELS[p.tipo]}</td>
                   <td className="px-4 py-2 text-gray-600">{p.direccion ?? '—'}</td>
-                  <td className="px-4 py-2 text-gray-600">{p.sector ?? '—'}</td>
-                  <td className="px-4 py-2 text-gray-600">{p.comuna ?? '—'}</td>
                   <td className="px-4 py-2 text-gray-600">{p.marco ?? '—'}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{p.acciones > 0 ? formatNumber(p.acciones) : '—'}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{p.hectareas > 0 ? formatNumber(p.hectareas) : '—'}</td>
@@ -296,107 +292,47 @@ export default function AccionistaDetalle() {
       )}
 
       {/* Totals summary */}
-      {(pagos.length > 0 || abonos.length > 0) && (
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: 'Cuota acciones', value: totalAcc },
-            { label: 'Multas', value: totalMultas },
-            { label: 'Cuota extra + Otros', value: totalCuota + totalOtros },
-            { label: 'Total pagado', value: grandTotal }
-          ].map(({ label, value }) => (
-            <div key={label} className="card p-3 text-center">
-              <div className="text-xs text-gray-500">{label}</div>
-              <div className="font-bold text-sm mt-1">{formatCLP(value)}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Payments table */}
-      <div className="card overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-100">
-          <h2 className="font-semibold text-sm text-gray-700">Historial de pagos</h2>
-        </div>
-        {pagos.length === 0 ? (
-          <p className="px-4 py-6 text-center text-sm text-gray-400">Sin pagos registrados.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="table-header">
-                <th className="px-4 py-2 text-left">Fecha</th>
-                <th className="px-4 py-2 text-left">N° Ingreso</th>
-                <th className="px-4 py-2 text-left">Temporada</th>
-                <th className="px-4 py-2 text-right">Períodos</th>
-                <th className="px-4 py-2 text-right">Monto Acc.</th>
-                <th className="px-4 py-2 text-right">Multas</th>
-                <th className="px-4 py-2 text-right">Total</th>
-                <th className="px-4 py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {pagos.map(p => (
-                <tr key={p.id} className="table-row">
-                  <td className="px-4 py-2 text-gray-500">{formatFecha(p.fecha)}</td>
-                  <td className="px-4 py-2">{p.numero_ingreso}</td>
-                  <td className="px-4 py-2 text-gray-500">{p.temporada_nombre}</td>
-                  <td className="px-4 py-2 text-right">{p.temporadas_pagadas}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{formatCLP(p.monto_acciones)}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{p.multas > 0 ? formatCLP(p.multas) : '—'}</td>
-                  <td className="px-4 py-2 text-right font-medium tabular-nums">{formatCLP(p.total)}</td>
-                  <td className="px-4 py-2">
-                    <button
-                      className="text-red-400 hover:text-red-600 text-xs hover:underline"
-                      onClick={() => setPendingDelete({ type: 'pago', item: p })}
-                    >
-                      Eliminar
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* Abonos table */}
-      {abonos.length > 0 && (
-        <div className="card overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100">
-            <h2 className="font-semibold text-sm text-gray-700">Abonos</h2>
+      {(temporada && deudorConfig) && (() => {
+        const showMulta = temporada != null && tieneMultaVencimiento(temporada)
+        const cols = showMulta ? 'grid-cols-3' : 'grid-cols-2'
+        const cuotaTooltip = (deuda && temporada && deudorConfig)
+          ? `${formatCLP(temporada.valor_accion)} × (${formatNumber(accionista.acciones)} acc. + ${formatNumber(accionista.hectareas)} há.) × ${deudorConfig.temporadas_adeudadas} temp.`
+          : undefined
+        const multaTooltip = (temporada && deudorConfig)
+          ? (() => {
+              const montoUnaTemporada = temporada.valor_accion * (accionista.acciones + accionista.hectareas)
+              const fraccion = montoUnaTemporada > 0
+                ? Math.max(0, 1 - Math.min(1, deudorConfig.total_abonado / montoUnaTemporada))
+                : 0
+              const pct = Math.round(fraccion * 100)
+              return `${formatCLP(temporada.monto_multa_por_accion)} × (${formatNumber(accionista.acciones)} acc. + ${formatNumber(accionista.hectareas)} há.) × ${pct}% pendiente`
+            })()
+          : undefined
+        const cards: { label: string; value: number; tooltip?: string }[] = [
+          { label: 'Cuota de acciones', value: deuda?.monto_acciones ?? totalAcc, tooltip: cuotaTooltip },
+          ...(showMulta ? [{ label: 'Multa por vencimiento', value: multaVencimiento, tooltip: multaTooltip }] : []),
+          { label: 'Total pagado', value: grandTotal }
+        ]
+        return (
+          <div className={`grid ${cols} gap-3`}>
+            {cards.map(({ label, value, tooltip }) => (
+              <div key={label} className="card p-3 text-center relative group">
+                <div className="text-xs text-gray-500 flex items-center justify-center gap-1">
+                  {label}
+                  {tooltip && <span className="text-gray-300 cursor-help text-xs">ⓘ</span>}
+                </div>
+                <div className="font-bold text-sm mt-1">{formatCLP(value)}</div>
+                {tooltip && (
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                    {tooltip}
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800" />
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="table-header">
-                <th className="px-4 py-2 text-left">Fecha</th>
-                <th className="px-4 py-2 text-left">N° Ingreso</th>
-                <th className="px-4 py-2 text-left">Temporada</th>
-                <th className="px-4 py-2 text-right">Monto</th>
-                <th className="px-4 py-2 text-right">Total</th>
-                <th className="px-4 py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {abonos.map(a => (
-                <tr key={a.id} className="table-row">
-                  <td className="px-4 py-2 text-gray-500">{formatFecha(a.fecha)}</td>
-                  <td className="px-4 py-2">{a.numero_ingreso}</td>
-                  <td className="px-4 py-2 text-gray-500">{a.temporada_nombre}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{formatCLP(a.monto)}</td>
-                  <td className="px-4 py-2 text-right font-medium tabular-nums">{formatCLP(a.total)}</td>
-                  <td className="px-4 py-2">
-                    <button
-                      className="text-red-400 hover:text-red-600 text-xs hover:underline"
-                      onClick={() => setPendingDelete({ type: 'abono', item: a })}
-                    >
-                      Eliminar
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Cargos table */}
       {cargos.length > 0 && (
@@ -434,6 +370,70 @@ export default function AccionistaDetalle() {
         </div>
       )}
 
+      {/* Historial unificado */}
+      {(() => {
+        const historial = [
+          ...pagos.map(p => ({
+            key: `p-${p.id}`, tipo: 'pago' as const,
+            fecha: p.fecha, numero_ingreso: p.numero_ingreso,
+            temporada_nombre: p.temporada_nombre,
+            periodos: p.temporadas_pagadas,
+            monto: p.monto_acciones, multas: p.multas, total: p.total
+          })),
+          ...abonos.map(a => ({
+            key: `a-${a.id}`, tipo: 'abono' as const,
+            fecha: a.fecha, numero_ingreso: a.numero_ingreso,
+            temporada_nombre: a.temporada_nombre,
+            periodos: null,
+            monto: a.monto, multas: a.multas, total: a.total
+          }))
+        ].sort((a, b) => a.fecha.localeCompare(b.fecha))
+
+        return (
+          <div className="card overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100">
+              <h2 className="font-semibold text-sm text-gray-700">Historial de pagos</h2>
+            </div>
+            {historial.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-gray-400">Sin pagos registrados.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="table-header">
+                    <th className="px-4 py-2 text-left">Tipo</th>
+                    <th className="px-4 py-2 text-left">Fecha</th>
+                    <th className="px-4 py-2 text-left">N° Ingreso</th>
+                    <th className="px-4 py-2 text-left">Temporada</th>
+                    <th className="px-4 py-2 text-right">Períodos</th>
+                    <th className="px-4 py-2 text-right">Monto</th>
+                    <th className="px-4 py-2 text-right">Multas</th>
+                    <th className="px-4 py-2 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historial.map(r => (
+                    <tr key={r.key} className="table-row">
+                      <td className="px-4 py-2">
+                        {r.tipo === 'pago'
+                          ? <span className="badge-blue">Pago</span>
+                          : <span className="text-xs font-medium text-gray-500 bg-gray-100 rounded px-1.5 py-0.5">Abono</span>}
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">{formatFecha(r.fecha)}</td>
+                      <td className="px-4 py-2">{r.numero_ingreso}</td>
+                      <td className="px-4 py-2 text-gray-500">{r.temporada_nombre}</td>
+                      <td className="px-4 py-2 text-right">{r.periodos ?? '—'}</td>
+                      <td className="px-4 py-2 text-right tabular-nums">{formatCLP(r.monto)}</td>
+                      <td className="px-4 py-2 text-right tabular-nums">{r.multas > 0 ? formatCLP(r.multas) : '—'}</td>
+                      <td className="px-4 py-2 text-right font-medium tabular-nums">{formatCLP(r.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )
+      })()}
+
       {/* Edit accionista modal */}
       {editForm && (
         <AccionistaModal
@@ -469,43 +469,6 @@ export default function AccionistaDetalle() {
         </div>
       )}
 
-      {/* Delete confirmation modal */}
-      {pendingDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5">
-            <h2 className="font-semibold text-gray-900 mb-1">
-              ¿Eliminar {pendingDelete.type === 'pago' ? 'pago' : 'abono'}?
-            </h2>
-            <p className="text-sm text-gray-500 mb-4">Esta acción no se puede deshacer.</p>
-            <div className="space-y-1 text-sm text-gray-700 mb-4">
-              <div className="flex justify-between">
-                <span>Fecha:</span>
-                <span>{formatFecha(pendingDelete.item.fecha)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>N° Ingreso:</span>
-                <span>{pendingDelete.item.numero_ingreso}</span>
-              </div>
-              <div className="flex justify-between font-semibold">
-                <span>Total:</span>
-                <span>{formatCLP(pendingDelete.item.total)}</span>
-              </div>
-            </div>
-            <div className="flex gap-2 justify-end">
-              <button className="btn-secondary" onClick={() => setPendingDelete(null)} disabled={deleting}>
-                Cancelar
-              </button>
-              <button
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md disabled:opacity-50"
-                onClick={confirmDelete}
-                disabled={deleting}
-              >
-                {deleting ? 'Eliminando…' : 'Sí, eliminar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

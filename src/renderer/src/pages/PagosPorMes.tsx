@@ -14,8 +14,6 @@ interface FilaMes {
   temporadas_pagadas: number | null
   monto_acciones: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total: number
 }
 
@@ -29,8 +27,6 @@ function pagoToFila(p: Pago): FilaMes {
     temporadas_pagadas: p.temporadas_pagadas,
     monto_acciones: p.monto_acciones,
     multas: p.multas,
-    cuota_extraordinaria: p.cuota_extraordinaria,
-    otros_ingresos: p.otros_ingresos,
     total: p.total
   }
 }
@@ -45,8 +41,6 @@ function abonoToFila(a: Abono): FilaMes {
     temporadas_pagadas: null,
     monto_acciones: a.monto,
     multas: a.multas,
-    cuota_extraordinaria: a.cuota_extraordinaria,
-    otros_ingresos: a.otros_ingresos,
     total: a.total
   }
 }
@@ -83,11 +77,9 @@ export default function PagosPorMes() {
   }, [pagos, abonos])
 
   const totals = useMemo(() => ({
-    monto_acciones:     filas.reduce((s, r) => s + r.monto_acciones, 0),
-    multas:             filas.reduce((s, r) => s + r.multas, 0),
-    cuota_extraordinaria: filas.reduce((s, r) => s + r.cuota_extraordinaria, 0),
-    otros_ingresos:     filas.reduce((s, r) => s + r.otros_ingresos, 0),
-    total:              filas.reduce((s, r) => s + r.total, 0)
+    monto_acciones: filas.reduce((s, r) => s + r.monto_acciones, 0),
+    multas:         filas.reduce((s, r) => s + r.multas, 0),
+    total:          filas.reduce((s, r) => s + r.total, 0)
   }), [filas])
 
   const months = Array.from({ length: 12 }, (_, i) => i + 1)
@@ -134,8 +126,6 @@ export default function PagosPorMes() {
               <th className="px-3 py-2 text-right">N° Temp.</th>
               <th className="px-3 py-2 text-right">Monto Acciones</th>
               <th className="px-3 py-2 text-right">Multas</th>
-              <th className="px-3 py-2 text-right">Cuota Extra.</th>
-              <th className="px-3 py-2 text-right">Otros</th>
               <th className="px-3 py-2 text-right">Total</th>
             </tr>
           </thead>
@@ -157,13 +147,11 @@ export default function PagosPorMes() {
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatCLP(r.monto_acciones)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{r.multas > 0 ? formatCLP(r.multas) : '—'}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{r.cuota_extraordinaria > 0 ? formatCLP(r.cuota_extraordinaria) : '—'}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{r.otros_ingresos > 0 ? formatCLP(r.otros_ingresos) : '—'}</td>
                 <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatCLP(r.total)}</td>
               </tr>
             ))}
             {filas.length === 0 && (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Sin movimientos en este mes</td></tr>
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Sin movimientos en este mes</td></tr>
             )}
           </tbody>
           {filas.length > 0 && (
@@ -172,8 +160,6 @@ export default function PagosPorMes() {
                 <td className="px-3 py-2" colSpan={4}>TOTALES</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatCLP(totals.monto_acciones)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatCLP(totals.multas)}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{formatCLP(totals.cuota_extraordinaria)}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{formatCLP(totals.otros_ingresos)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatCLP(totals.total)}</td>
               </tr>
             </tfoot>

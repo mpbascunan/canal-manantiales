@@ -1,8 +1,13 @@
 import Database from 'better-sqlite3'
 import { app } from 'electron'
+import { copyFileSync, existsSync } from 'fs'
 import { join } from 'path'
 
 let db: Database.Database
+
+// Must match the highest version handled in runMigrations(). A database created
+// from SCHEMA below is already at this version and must skip all migrations.
+const LATEST_VERSION = 11
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS temporadas (
@@ -17,12 +22,13 @@ CREATE TABLE IF NOT EXISTS temporadas (
   monto_multa_por_accion REAL    NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS accionistas (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  numero    TEXT,
-  nombre    TEXT    NOT NULL,
-  tipo      TEXT    NOT NULL CHECK(tipo IN ('PARCELA','SITIO','PEQUEÑO_PROPIETARIO')),
-  activo    INTEGER NOT NULL DEFAULT 1,
-  notas     TEXT
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre           TEXT    NOT NULL,
+  apellido_paterno TEXT,
+  apellido_materno TEXT,
+  numero_socio     TEXT,
+  activo           INTEGER NOT NULL DEFAULT 1,
+  notas            TEXT
 );
 CREATE TABLE IF NOT EXISTS propiedades (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +36,9 @@ CREATE TABLE IF NOT EXISTS propiedades (
   numero        TEXT,
   tipo          TEXT    NOT NULL CHECK(tipo IN ('PARCELA','SITIO','PEQUEÑO_PROPIETARIO')),
   acciones      REAL    NOT NULL DEFAULT 0,
-  hectareas     REAL    NOT NULL DEFAULT 0
+  hectareas     REAL    NOT NULL DEFAULT 0,
+  direccion     TEXT,
+  marco         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_propiedades_accionista ON propiedades(accionista_id);
 CREATE TABLE IF NOT EXISTS pagos (
@@ -42,8 +50,6 @@ CREATE TABLE IF NOT EXISTS pagos (
   temporadas_pagadas   INTEGER NOT NULL DEFAULT 1,
   monto_acciones       REAL    NOT NULL DEFAULT 0,
   multas               REAL    NOT NULL DEFAULT 0,
-  cuota_extraordinaria REAL    NOT NULL DEFAULT 0,
-  otros_ingresos       REAL    NOT NULL DEFAULT 0,
   total                REAL    NOT NULL,
   notas                TEXT,
   created_at           TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -60,8 +66,6 @@ CREATE TABLE IF NOT EXISTS abonos (
   temporadas_cubiertas INTEGER NOT NULL DEFAULT 1,
   monto                REAL    NOT NULL DEFAULT 0,
   multas               REAL    NOT NULL DEFAULT 0,
-  cuota_extraordinaria REAL    NOT NULL DEFAULT 0,
-  otros_ingresos       REAL    NOT NULL DEFAULT 0,
   total                REAL    NOT NULL,
   notas                TEXT,
   created_at           TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -72,8 +76,6 @@ CREATE TABLE IF NOT EXISTS deudores_config (
   accionista_id        INTEGER NOT NULL REFERENCES accionistas(id),
   temporada_id         INTEGER NOT NULL REFERENCES temporadas(id),
   temporadas_adeudadas INTEGER NOT NULL DEFAULT 1,
-  cuota_extraordinaria REAL    NOT NULL DEFAULT 0,
-  otros_ingresos       REAL    NOT NULL DEFAULT 0,
   PRIMARY KEY (accionista_id, temporada_id)
 );
 CREATE TABLE IF NOT EXISTS cargos (
@@ -99,8 +101,28 @@ CREATE INDEX IF NOT EXISTS idx_cargo_accionistas_cargo      ON cargo_accionistas
 CREATE INDEX IF NOT EXISTS idx_cargo_accionistas_accionista ON cargo_accionistas(accionista_id);
 `
 
-function runMigrations(database: Database.Database): void {
+function hasColumn(database: Database.Database, table: string, column: string): boolean {
+  const cols = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  return cols.some(c => c.name === column)
+}
+
+// Copy the database before touching it. Several migrations are destructive
+// (v3 merges accionistas, v7 clears numero_ingreso), so a bad migration on a
+// client machine would otherwise be unrecoverable. One backup per source
+// version — enough to roll back an update, without growing without bound.
+function backupBeforeMigrating(database: Database.Database, dbPath: string, version: number): void {
+  const target = `${dbPath}.bak-v${version}`
+  if (existsSync(target)) return
+  // Fold the WAL into the main file so the plain copy is complete.
+  database.pragma('wal_checkpoint(TRUNCATE)')
+  copyFileSync(dbPath, target)
+}
+
+function runMigrations(database: Database.Database, dbPath: string): void {
   const version = database.pragma('user_version', { simple: true }) as number
+  if (version >= LATEST_VERSION) return
+
+  backupBeforeMigrating(database, dbPath, version)
 
   if (version < 1) {
     // v1: Seed propiedades from existing accionistas data (one-time migration)
@@ -208,8 +230,7 @@ function runMigrations(database: Database.Database): void {
     // Amount per accionista is now tarifa × (acciones + hectareas).
     database.pragma('foreign_keys = OFF')
     database.transaction(() => {
-      const cols = database.prepare("PRAGMA table_info(cargos)").all() as { name: string }[]
-      const isOldSchema = cols.some(c => c.name === 'accionista_id')
+      const isOldSchema = hasColumn(database, 'cargos', 'accionista_id')
 
       if (isOldSchema) {
         const oldRows = database.prepare('SELECT * FROM cargos').all() as any[]
@@ -315,6 +336,46 @@ function runMigrations(database: Database.Database): void {
       database.prepare("ALTER TABLE cargos ADD COLUMN tipo_tarifa TEXT NOT NULL DEFAULT 'proporcional'").run()
     })()
     database.pragma('user_version = 8')
+  }
+
+  if (version < 9) {
+    // v9: Drop legacy numero/tipo from accionistas — all data lives in propiedades.
+    database.transaction(() => {
+      const cols = database.prepare('PRAGMA table_info(accionistas)').all() as { name: string }[]
+      const names = cols.map(c => c.name)
+      if (names.includes('numero')) database.prepare('ALTER TABLE accionistas DROP COLUMN numero').run()
+      if (names.includes('tipo'))   database.prepare('ALTER TABLE accionistas DROP COLUMN tipo').run()
+    })()
+    database.pragma('user_version = 9')
+  }
+
+  if (version < 10) {
+    // v10: Drop cuota_extraordinaria and otros_ingresos from pagos, abonos, deudores_config.
+    // These are now represented exclusively as user-created cargos.
+    database.transaction(() => {
+      const check = (table: string, col: string) => {
+        const cols = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        return cols.some(c => c.name === col)
+      }
+      if (check('pagos', 'cuota_extraordinaria'))          database.prepare('ALTER TABLE pagos           DROP COLUMN cuota_extraordinaria').run()
+      if (check('pagos', 'otros_ingresos'))                database.prepare('ALTER TABLE pagos           DROP COLUMN otros_ingresos').run()
+      if (check('abonos', 'cuota_extraordinaria'))         database.prepare('ALTER TABLE abonos          DROP COLUMN cuota_extraordinaria').run()
+      if (check('abonos', 'otros_ingresos'))               database.prepare('ALTER TABLE abonos          DROP COLUMN otros_ingresos').run()
+      if (check('deudores_config', 'cuota_extraordinaria')) database.prepare('ALTER TABLE deudores_config DROP COLUMN cuota_extraordinaria').run()
+      if (check('deudores_config', 'otros_ingresos'))      database.prepare('ALTER TABLE deudores_config DROP COLUMN otros_ingresos').run()
+    })()
+    database.pragma('user_version = 10')
+  }
+
+  if (version < 11) {
+    // v11: Drop sector/comuna from propiedades — no longer used.
+    database.transaction(() => {
+      const cols = database.prepare('PRAGMA table_info(propiedades)').all() as { name: string }[]
+      const names = cols.map(c => c.name)
+      if (names.includes('sector')) database.prepare('ALTER TABLE propiedades DROP COLUMN sector').run()
+      if (names.includes('comuna')) database.prepare('ALTER TABLE propiedades DROP COLUMN comuna').run()
+    })()
+    database.pragma('user_version = 11')
   }
 }
 

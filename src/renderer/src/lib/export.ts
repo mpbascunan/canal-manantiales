@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { formatCLP, formatFecha, mesNombre, formatNumber, calcularMontoAcciones } from './formulas'
-import type { Pago, ResumenMensual, ResumenContable, Deudor, Temporada, Accionista, Propiedad, AccionistaType } from '../../../shared/types'
+import type { Pago, ResumenMensual, ResumenContable, Deudor, Temporada, Accionista, Propiedad, AccionistaType, CargoResumen } from '../../../shared/types'
 import { nombreCompleto } from '../../../shared/types'
 
 // ── Excel exports ────────────────────────────────────────────────────────────
@@ -10,18 +10,16 @@ import { nombreCompleto } from '../../../shared/types'
 export function exportPagosMes(pagos: Pago[], year: number, month: number): void {
   const mes = mesNombre(month).toUpperCase()
   const headers = ['Fecha', 'N° Ingreso', 'Accionista', 'Acciones', 'Hectáreas',
-                   'N° Temporadas', 'Monto Acciones', 'Multas', 'Cuota Extra.', 'Otros', 'Total']
+                   'N° Temporadas', 'Monto Acciones', 'Multas', 'Total']
   const rows = pagos.map(p => [
     formatFecha(p.fecha), p.numero_ingreso, p.accionista_nombre,
     p.accionista_tipo === 'PEQUEÑO_PROPIETARIO' ? '' : '',
     '', p.temporadas_pagadas,
-    p.monto_acciones, p.multas, p.cuota_extraordinaria, p.otros_ingresos, p.total
+    p.monto_acciones, p.multas, p.total
   ])
   const totals = ['TOTALES', '', '', '', '', '',
     pagos.reduce((s, p) => s + p.monto_acciones, 0),
     pagos.reduce((s, p) => s + p.multas, 0),
-    pagos.reduce((s, p) => s + p.cuota_extraordinaria, 0),
-    pagos.reduce((s, p) => s + p.otros_ingresos, 0),
     pagos.reduce((s, p) => s + p.total, 0)
   ]
 
@@ -33,28 +31,40 @@ export function exportPagosMes(pagos: Pago[], year: number, month: number): void
   XLSX.writeFile(wb, `Pagos_${mes}_${year}.xlsx`)
 }
 
+// Cargos named "Multa..." count as multa income; the rest get their own row
+function splitCargosMulta(cargos: CargoResumen[]): { multaCargos: CargoResumen[]; otrosCargos: CargoResumen[] } {
+  return {
+    multaCargos: cargos.filter(c => /multa/i.test(c.nombre)),
+    otrosCargos: cargos.filter(c => !/multa/i.test(c.nombre))
+  }
+}
+
 export function exportResumenContable(
   resumen: ResumenContable,
   mensual: ResumenMensual[],
-  temporada: Temporada
+  temporada: Temporada,
+  cargos: CargoResumen[] = []
 ): void {
   const wb = XLSX.utils.book_new()
+
+  const { multaCargos, otrosCargos } = splitCargosMulta(cargos)
+  const ingresoMultas = resumen.multas + multaCargos.reduce((s, c) => s + c.total_cobrado, 0)
+  const totalConCargos = resumen.total + cargos.reduce((s, c) => s + c.total_cobrado, 0)
 
   const data: any[][] = [
     [`RESUMEN INGRESOS TEMPORADA ${temporada.nombre}`],
     [],
     ['CUENTA', 'MONTO'],
     ['Ingreso por Cuota Acciones', resumen.monto_acciones],
-    ['Ingresos por Multas', resumen.multas],
-    ['Cuota Extraordinaria', resumen.cuota_extraordinaria],
-    ['Otros Ingresos', resumen.otros_ingresos],
-    ['TOTAL', resumen.total],
+    ['Ingresos por Multas', ingresoMultas],
+    ...otrosCargos.map(c => [c.nombre, c.total_cobrado]),
+    ['TOTAL', totalConCargos],
     [],
     ['CANCELACIONES MENSUALES'],
-    ['Mes', 'Monto Acciones', 'Multas', 'Cuota Extra.', 'Otros', 'Total'],
+    ['Mes', 'Monto Acciones', 'Multas', 'Total'],
     ...mensual.map(m => [
       mesNombre(m.mes).toUpperCase(),
-      m.monto_acciones, m.multas, m.cuota_extraordinaria, m.otros_ingresos, m.total
+      m.monto_acciones, m.multas, m.total
     ])
   ]
 
@@ -67,16 +77,15 @@ export function exportResumenContable(
 export function exportDeudores(deudores: Deudor[], temporada: Temporada): void {
   const wb = XLSX.utils.book_new()
   const headers = ['Accionista', 'N°', 'Acciones', 'Hectáreas', 'N° Temporadas',
-                   'Monto Adeudado', 'Multas', 'Cuota Extra.', 'Otros', 'Total']
+                   'Monto Adeudado', 'Multas', 'Total']
   const rows = deudores.map(d => [
     nombreCompleto(d), (d as any).numeros ?? d.numero ?? '',
     d.acciones || '', d.hectareas || '',
-    d.temporadas_adeudadas, d.monto_adeudado, d.multas,
-    d.cuota_extraordinaria, d.otros_ingresos, d.total
+    d.temporadas_adeudadas, d.monto_adeudado, d.multas, d.total
   ])
   const wsData = [[`DEUDORES TEMPORADA ${temporada.nombre}`], headers, ...rows]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
-  ws['!cols'] = [30, 14, 10, 10, 12, 16, 12, 12, 12, 14].map(w => ({ wch: w }))
+  ws['!cols'] = [30, 14, 10, 10, 12, 16, 12, 14].map(w => ({ wch: w }))
   XLSX.utils.book_append_sheet(wb, ws, 'Deudores')
   XLSX.writeFile(wb, `Deudores_${temporada.nombre}.xlsx`)
 }
@@ -121,7 +130,8 @@ export function exportPagosMesPdf(pagos: Pago[], year: number, month: number): v
 export function exportResumenContablePdf(
   resumen: ResumenContable,
   mensual: ResumenMensual[],
-  temporada: Temporada
+  temporada: Temporada,
+  cargos: CargoResumen[] = []
 ): void {
   const doc = newPdf()
   doc.setFontSize(11).setFont('helvetica', 'bold')
@@ -129,16 +139,19 @@ export function exportResumenContablePdf(
   doc.setFontSize(10).setFont('helvetica', 'normal')
   doc.text(`RESUMEN CONTABLE — TEMPORADA ${temporada.nombre}`, 105, 20, { align: 'center' })
 
+  const { multaCargos, otrosCargos } = splitCargosMulta(cargos)
+  const ingresoMultas = resumen.multas + multaCargos.reduce((s, c) => s + c.total_cobrado, 0)
+  const totalConCargos = resumen.total + cargos.reduce((s, c) => s + c.total_cobrado, 0)
+
   autoTable(doc, {
     startY: 28,
     head: [['Cuenta', 'Monto']],
     body: [
       ['Ingreso por Cuota Acciones', formatCLP(resumen.monto_acciones)],
-      ['Ingresos por Multas', formatCLP(resumen.multas)],
-      ['Cuota Extraordinaria', formatCLP(resumen.cuota_extraordinaria)],
-      ['Otros Ingresos', formatCLP(resumen.otros_ingresos)]
+      ['Ingresos por Multas', formatCLP(ingresoMultas)],
+      ...otrosCargos.map(c => [c.nombre, formatCLP(c.total_cobrado)])
     ],
-    foot: [['TOTAL', formatCLP(resumen.total)]],
+    foot: [['TOTAL', formatCLP(totalConCargos)]],
     styles: { fontSize: 9 },
     headStyles: { fillColor: [7, 89, 133] },
     footStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: 'bold' },
@@ -151,14 +164,13 @@ export function exportResumenContablePdf(
 
   autoTable(doc, {
     startY: lastY + 4,
-    head: [['Mes', 'Monto Acciones', 'Multas', 'Cuota Extra.', 'Otros', 'Total']],
+    head: [['Mes', 'Monto Acciones', 'Multas', 'Total']],
     body: mensual.map(m => [
-      mesNombre(m.mes), formatCLP(m.monto_acciones), formatCLP(m.multas),
-      formatCLP(m.cuota_extraordinaria), formatCLP(m.otros_ingresos), formatCLP(m.total)
+      mesNombre(m.mes), formatCLP(m.monto_acciones), formatCLP(m.multas), formatCLP(m.total)
     ]),
     styles: { fontSize: 8 },
     headStyles: { fillColor: [7, 89, 133] },
-    columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' } }
+    columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } }
   })
 
   doc.save(`Resumen_${temporada.nombre}.pdf`)
@@ -336,8 +348,6 @@ interface ComprobanteAbonoData {
   numero_ingreso: number
   monto: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total: number
   monto_restante: number   // remaining debt after this abono
 }
@@ -367,11 +377,9 @@ export function exportComprobanteAbono(data: ComprobanteAbonoData): void {
   doc.setFont('helvetica', 'normal').text(String(data.numero_ingreso), 50, 62)
 
   const bodyRows: string[][] = []
-  if (data.monto > 0)               bodyRows.push(['Cuota por acciones', formatCLP(data.monto)])
-  if (data.multas > 0)              bodyRows.push(['Multas', formatCLP(data.multas)])
-  if (data.cuota_extraordinaria > 0) bodyRows.push(['Cuota Extraordinaria', formatCLP(data.cuota_extraordinaria)])
-  if (data.otros_ingresos > 0)      bodyRows.push(['Otros Ingresos', formatCLP(data.otros_ingresos)])
-  if (bodyRows.length === 0)        bodyRows.push(['Abono', formatCLP(data.total)])
+  if (data.monto > 0)   bodyRows.push(['Cuota por acciones', formatCLP(data.monto)])
+  if (data.multas > 0)  bodyRows.push(['Multas', formatCLP(data.multas)])
+  if (bodyRows.length === 0) bodyRows.push(['Abono', formatCLP(data.total)])
 
   autoTable(doc, {
     startY: 68,

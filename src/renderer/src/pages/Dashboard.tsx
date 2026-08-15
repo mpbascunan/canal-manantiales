@@ -82,8 +82,6 @@ function BarChart({ data }: { data: ResumenMensual[] }) {
         const totalH = (d.total / maxTotal) * chartH
         const accH  = (d.monto_acciones / maxTotal) * chartH
         const multH = (d.multas / maxTotal) * chartH
-        const otrosH = ((d.cuota_extraordinaria + d.otros_ingresos) / maxTotal) * chartH
-
         const y = chartH - totalH
         let stackY = chartH
 
@@ -92,8 +90,7 @@ function BarChart({ data }: { data: ResumenMensual[] }) {
             {/* Stacked bars */}
             {[
               { h: accH,  color: '#3698b0' },
-              { h: multH, color: '#ef4444' },
-              { h: otrosH,color: '#f59e0b' }
+              { h: multH, color: '#ef4444' }
             ].map(({ h, color }) => {
               if (h <= 0) return null
               stackY -= h
@@ -172,12 +169,11 @@ export default function Dashboard() {
   // Donut segments
   const donutSegments: DonutSegment[] = resumen ? [
     { label: 'Cuota acciones', value: resumen.monto_acciones, color: '#3698b0' },
-    { label: 'Multas',         value: resumen.multas,         color: '#ef4444' },
-    { label: 'Otros',          value: resumen.cuota_extraordinaria + resumen.otros_ingresos, color: '#f59e0b' }
+    { label: 'Multas',         value: resumen.multas,         color: '#ef4444' }
   ] : []
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Inicio</h1>
         <p className="text-sm text-gray-500 mt-1">
@@ -218,8 +214,7 @@ export default function Dashboard() {
                 <div className="flex gap-4 mt-2 justify-center">
                   {[
                     { color: '#3698b0', label: 'Acciones' },
-                    { color: '#ef4444', label: 'Multas' },
-                    { color: '#f59e0b', label: 'Otros' }
+                    { color: '#ef4444', label: 'Multas' }
                   ].map(({ color, label }) => (
                     <div key={label} className="flex items-center gap-1 text-xs text-gray-500">
                       <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: color }} />

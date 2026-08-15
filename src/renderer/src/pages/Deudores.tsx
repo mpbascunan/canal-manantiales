@@ -3,31 +3,25 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/ipc'
 import { calcularDeuda, calcularMultaVencimiento, tieneMultaVencimiento, formatCLP } from '../lib/formulas'
 import { exportDeudores } from '../lib/export'
-import type { Temporada, AccionistaType } from '../../../shared/types'
+import type { Temporada } from '../../../shared/types'
 
 interface DeudorRow {
   id: number
   nombre: string
-  tipo: AccionistaType
   acciones: number
   hectareas: number
   numeros: string | null
   temporadas_adeudadas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total_abonado: number
   total_cargos: number
-}
-
-const TIPO_LABELS: Record<AccionistaType, string> = {
-  PARCELA: 'Parcela', SITIO: 'Sitio', 'PEQUEÑO_PROPIETARIO': 'Pequeño Propietario'
+  total_cargos_pagados: number
+  has_full_payment: number
 }
 
 export default function Deudores() {
   const navigate = useNavigate()
   const [temporada, setTemporada] = useState<Temporada | null>(null)
   const [rows, setRows] = useState<DeudorRow[]>([])
-  const [filterTipo, setFilterTipo] = useState<AccionistaType | ''>('')
   const [search, setSearch] = useState('')
   const [saving, setSaving] = useState<number | null>(null)
 
@@ -45,16 +39,20 @@ export default function Deudores() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     return rows.filter(r =>
-      (!filterTipo || r.tipo === filterTipo) &&
       (!q || r.nombre.toLowerCase().includes(q))
     )
-  }, [rows, search, filterTipo])
+  }, [rows, search])
 
   const hayMultaVenc = temporada ? tieneMultaVencimiento(temporada) : false
 
   const computedRows = useMemo(() => {
     if (!temporada) return []
     return filtered.map(r => {
+      if (r.has_full_payment) {
+        // Season quota already paid — only pending cargos remain
+        const restante = Math.max(0, r.total_cargos - r.total_cargos_pagados)
+        return { ...r, monto_adeudado: 0, multas: 0, total: r.total_cargos, restante }
+      }
       const multaVencimiento = hayMultaVenc
         ? calcularMultaVencimiento(r.acciones, r.hectareas, temporada.monto_multa_por_accion, temporada.valor_accion, r.total_abonado)
         : 0
@@ -63,11 +61,9 @@ export default function Deudores() {
         acciones:            r.acciones,
         hectareas:           r.hectareas,
         temporadasAdeudadas: r.temporadas_adeudadas,
-        cuotaExtraordinaria: r.cuota_extraordinaria,
-        otrosIngresos:       r.otros_ingresos,
         totalAbonado:        r.total_abonado,
         totalCargos:         r.total_cargos ?? 0,
-        totalCargosPagados:  0,
+        totalCargosPagados:  r.total_cargos_pagados ?? 0,
         montoPorAccion:      temporada.monto_multa_por_accion,
         multaVencimiento
       })
@@ -87,9 +83,7 @@ export default function Deudores() {
     await api.deudores.upsertConfig({
       accionista_id: row.id,
       temporada_id: temporada.id,
-      temporadas_adeudadas: row.temporadas_adeudadas,
-      cuota_extraordinaria: row.cuota_extraordinaria,
-      otros_ingresos: row.otros_ingresos
+      temporadas_adeudadas: row.temporadas_adeudadas
     })
     setSaving(null)
   }
@@ -114,10 +108,6 @@ export default function Deudores() {
 
       <div className="flex gap-3 items-center">
         <input className="input max-w-xs" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
-        <select className="input max-w-[200px]" value={filterTipo} onChange={e => setFilterTipo(e.target.value as any)}>
-          <option value="">Todos los tipos</option>
-          {Object.entries(TIPO_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
         <span className="text-sm text-gray-500 ml-auto">Total pendiente: <strong>{formatCLP(grandTotal)}</strong></span>
       </div>
 
@@ -126,7 +116,6 @@ export default function Deudores() {
           <thead>
             <tr className="table-header">
               <th className="px-3 py-2 text-left">Accionista</th>
-              <th className="px-3 py-2 text-left">Tipo</th>
               <th className="px-3 py-2 text-right">Acciones</th>
               <th className="px-3 py-2 text-right">Hectáreas</th>
               <th className="px-3 py-2 text-right">N° Temp.</th>
@@ -144,27 +133,35 @@ export default function Deudores() {
                   <td className="px-3 py-2">
                     <div className="font-medium">{r.nombre}</div>
                     {r.numeros && <div className="text-xs text-gray-400">N° {r.numeros}</div>}
+                    {r.has_full_payment ? (
+                      <span className="text-xs text-indigo-600 font-medium">Cargos pendientes</span>
+                    ) : null}
                   </td>
-                  <td className="px-3 py-2"><span className="badge-blue">{TIPO_LABELS[r.tipo]}</span></td>
                   <td className="px-3 py-2 text-right tabular-nums">{r.acciones > 0 ? r.acciones : '—'}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{r.hectareas > 0 ? r.hectareas : '—'}</td>
                   <td className="px-3 py-2 text-right">
-                    <input
-                      type="number" min={1} className="input w-16 text-center py-0.5"
-                      value={row.temporadas_adeudadas}
-                      onChange={e => updateRow(r.id, { temporadas_adeudadas: Number(e.target.value) })}
-                      onBlur={() => saveConfig(row)}
-                      title={saving === r.id ? 'Guardando…' : ''}
-                    />
+                    {r.has_full_payment ? (
+                      <span className="text-gray-300">—</span>
+                    ) : (
+                      <input
+                        type="number" min={1} className="input w-16 text-center py-0.5"
+                        value={row.temporadas_adeudadas}
+                        onChange={e => updateRow(r.id, { temporadas_adeudadas: Number(e.target.value) })}
+                        onBlur={() => saveConfig(row)}
+                        title={saving === r.id ? 'Guardando…' : ''}
+                      />
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-gray-500">
                     <div>{formatCLP(r.total)}</div>
                     {(r.total_cargos ?? 0) > 0 && (
-                      <div className="text-xs text-indigo-500">inc. {formatCLP(r.total_cargos)} cargos</div>
+                      <div className="text-xs text-indigo-500">
+                        {r.has_full_payment ? 'solo cargos' : `inc. ${formatCLP(r.total_cargos)} cargos`}
+                      </div>
                     )}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    {r.total_abonado > 0
+                    {!r.has_full_payment && r.total_abonado > 0
                       ? <span className="text-canal-600">{formatCLP(r.total_abonado)}</span>
                       : <span className="text-gray-300">—</span>
                     }
@@ -181,20 +178,22 @@ export default function Deudores() {
                       >
                         Abonar
                       </button>
-                      <button
-                        className="btn-primary btn-sm text-xs"
-                        onClick={() => navigate(`/pagos/nuevo?accionista=${r.id}`)}
-                        title="Pago completo"
-                      >
-                        Pagar
-                      </button>
+                      {!r.has_full_payment && (
+                        <button
+                          className="btn-primary btn-sm text-xs"
+                          onClick={() => navigate(`/pagos/nuevo?accionista=${r.id}`)}
+                          title="Pago completo"
+                        >
+                          Pagar
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
               )
             })}
             {computedRows.length === 0 && (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">
                 {rows.length === 0 ? '¡Todos los accionistas han pagado!' : 'Sin resultados'}
               </td></tr>
             )}

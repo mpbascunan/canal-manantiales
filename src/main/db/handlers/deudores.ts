@@ -24,16 +24,18 @@ export function registerDeudorHandlers(): void {
     return getDb()
       .prepare(
         `SELECT a.id, a.nombre, a.activo, a.notas,
-                COALESCE(pt.total_acciones, 0)   AS acciones,
-                COALESCE(pt.total_hectareas, 0) AS hectareas,
-                COALESCE(pf.tipo, a.tipo)                 AS tipo,
-                COALESCE(pf.numero, a.numero)             AS numero,
-                COALESCE(pt.numeros, a.numero)            AS numeros,
+                COALESCE(pt.total_acciones, 0)            AS acciones,
+                COALESCE(pt.total_hectareas, 0)           AS hectareas,
+                pf.tipo                                   AS tipo,
+                pf.numero                                 AS numero,
+                pt.numeros                                AS numeros,
                 COALESCE(dc.temporadas_adeudadas, 1)      AS temporadas_adeudadas,
-                COALESCE(dc.cuota_extraordinaria, 0)      AS cuota_extraordinaria,
-                COALESCE(dc.otros_ingresos, 0)            AS otros_ingresos,
                 COALESCE(abn.total_abonado, 0)            AS total_abonado,
-                COALESCE(cg.total_cargos, 0)              AS total_cargos
+                COALESCE(cg.total_cargos, 0)              AS total_cargos,
+                COALESCE(cg.total_cargos_pagados, 0)      AS total_cargos_pagados,
+                CASE WHEN EXISTS(
+                  SELECT 1 FROM pagos p WHERE p.accionista_id = a.id AND p.temporada_id = ?
+                ) THEN 1 ELSE 0 END AS has_full_payment
          FROM accionistas a
          ${PROPS_AGG}
          LEFT JOIN deudores_config dc
@@ -48,7 +50,12 @@ export function registerDeudorHandlers(): void {
                SELECT ca.accionista_id,
                       SUM(CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
                                ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
-                          END) AS total_cargos
+                          END) AS total_cargos,
+                      SUM(CASE WHEN ca.pagado = 1 THEN
+                               CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
+                                    ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
+                               END
+                          ELSE 0 END) AS total_cargos_pagados
                FROM cargo_accionistas ca
                JOIN cargos c ON c.id = ca.cargo_id
                LEFT JOIN (
@@ -61,13 +68,20 @@ export function registerDeudorHandlers(): void {
                GROUP BY ca.accionista_id
          ) cg ON cg.accionista_id = a.id
          WHERE a.activo = 1
-           AND NOT EXISTS (
-             SELECT 1 FROM pagos p
-             WHERE p.accionista_id = a.id AND p.temporada_id = ?
+           AND (
+             NOT EXISTS (
+               SELECT 1 FROM pagos p
+               WHERE p.accionista_id = a.id AND p.temporada_id = ?
+             )
+             OR EXISTS (
+               SELECT 1 FROM cargo_accionistas ca
+               JOIN cargos c ON c.id = ca.cargo_id
+               WHERE ca.accionista_id = a.id AND c.temporada_id = ? AND ca.pagado = 0
+             )
            )
          ORDER BY a.nombre`
       )
-      .all(temporadaId, temporadaId, temporadaId, temporadaId)
+      .all(temporadaId, temporadaId, temporadaId, temporadaId, temporadaId, temporadaId)
   })
 
   ipcMain.handle('deudores:get-config', (_e, accionistaId: number, temporadaId: number) => {
@@ -111,8 +125,6 @@ export function registerDeudorHandlers(): void {
 
     return {
       temporadas_adeudadas:  config?.temporadas_adeudadas ?? 1,
-      cuota_extraordinaria:  config?.cuota_extraordinaria ?? 0,
-      otros_ingresos:        config?.otros_ingresos ?? 0,
       total_abonado:         abonado.total_abonado,
       total_cargos:          cargos.total_cargos,
       total_cargos_pagados:  cargos.total_cargos_pagados
@@ -123,13 +135,11 @@ export function registerDeudorHandlers(): void {
     getDb()
       .prepare(
         `INSERT INTO deudores_config
-           (accionista_id, temporada_id, temporadas_adeudadas, cuota_extraordinaria, otros_ingresos)
+           (accionista_id, temporada_id, temporadas_adeudadas)
          VALUES
-           (@accionista_id, @temporada_id, @temporadas_adeudadas, @cuota_extraordinaria, @otros_ingresos)
+           (@accionista_id, @temporada_id, @temporadas_adeudadas)
          ON CONFLICT(accionista_id, temporada_id) DO UPDATE SET
-           temporadas_adeudadas = excluded.temporadas_adeudadas,
-           cuota_extraordinaria = excluded.cuota_extraordinaria,
-           otros_ingresos       = excluded.otros_ingresos`
+           temporadas_adeudadas = excluded.temporadas_adeudadas`
       )
       .run(cfg)
   })

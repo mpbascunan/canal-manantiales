@@ -1,18 +1,6 @@
 import { useState } from 'react'
 import type { AccionistaType, PropiedadInput } from '../../../shared/types'
 
-const COMUNAS_OHIGGINS = [
-  // Provincia de Cachapoal
-  'Rancagua', 'Codegua', 'Coinco', 'Coltauco', 'Doñihue', 'Graneros',
-  'Las Cabras', 'Machalí', 'Malloa', 'Mostazal', 'Olivar', 'Peumo',
-  'Pichidegua', 'Quinta de Tilcoco', 'Rengo', 'Requínoa', 'San Vicente de Tagua Tagua',
-  // Provincia de Colchagua
-  'San Fernando', 'Chépica', 'Chimbarongo', 'Lolol', 'Nancagua', 'Palmilla',
-  'Peralillo', 'Placilla', 'Pumanque', 'Santa Cruz',
-  // Provincia de Cardenal Caro
-  'Pichilemu', 'La Estrella', 'Litueche', 'Marchihue', 'Navidad', 'Paredones'
-]
-
 const DEFAULT_DIRECCIONES = ['Rinconada de manantiales', 'La tuna', 'Las canchillas']
 const DEFAULT_MARCOS = [
   'Canal principal', 'El cerrillo', 'Cerro al peñon', 'El durazno',
@@ -121,7 +109,7 @@ export const EMPTY_ACCIONISTA_FORM: AccionistaEditForm = {
   numero_socio: '',
   activo: true,
   notas: '',
-  propiedades: [{ numero: '', tipo: 'PARCELA', acciones: 0, hectareas: 0, direccion: '', sector: '', comuna: '', marco: '' }]
+  propiedades: [{ numero: '', tipo: 'PARCELA', acciones: 0, hectareas: 0, direccion: '', marco: '' }]
 }
 
 export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
@@ -140,7 +128,7 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
 
   const addPropiedad = () => {
     const lastTipo = value.propiedades[value.propiedades.length - 1]?.tipo ?? 'PARCELA'
-    set({ propiedades: [...value.propiedades, { numero: '', tipo: lastTipo, acciones: 0, hectareas: 0, direccion: '', sector: '', comuna: '', marco: '' }] })
+    set({ propiedades: [...value.propiedades, { numero: '', tipo: lastTipo, acciones: 0, hectareas: 0, direccion: '', marco: '' }] })
   }
 
   const removePropiedad = (i: number) => {
@@ -256,7 +244,7 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
                     )}
                   </div>
                   {/* Row 2: Address fields */}
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-xs text-gray-500">Dirección</label>
                       <ExtendableSelect
@@ -266,26 +254,6 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
                         onChange={v => setPropiedad(i, { direccion: v })}
                         className="input text-sm w-full"
                       />
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500">Sector</label>
-                      <input
-                        className="input text-sm"
-                        placeholder="Sector"
-                        value={p.sector ?? ''}
-                        onChange={e => setPropiedad(i, { sector: e.target.value })}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500">Comuna</label>
-                      <select
-                        className="input text-sm"
-                        value={p.comuna ?? ''}
-                        onChange={e => setPropiedad(i, { comuna: e.target.value })}
-                      >
-                        <option value="">— Seleccionar —</option>
-                        {COMUNAS_OHIGGINS.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
                     </div>
                     <div>
                       <label className="text-xs text-gray-500">Marco</label>

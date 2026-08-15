@@ -32,6 +32,8 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  win.maximize()
+
   win.on('ready-to-show', () => win.show())
 
   win.webContents.setWindowOpenHandler(({ url }) => {

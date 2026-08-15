@@ -16,8 +16,6 @@ export interface RawPago {
   temporadas_pagadas: number
   monto_acciones: number
   multas: number
-  cuota_extraordinaria: number
-  otros_ingresos: number
   total: number
 }
 
@@ -117,8 +115,7 @@ export function parsePagos(buffer: ArrayBuffer): RawPago[] {
   const headerPattern = /^fecha$/i
   let inSection = false
   let colFecha = -1, colIngreso = -1, colAcc = -1, colHect = -1,
-      colTemps = -1, colMonto = -1, colMultas = -1, colCuota = -1,
-      colOtros = -1, colTotal = -1
+      colTemps = -1, colMonto = -1, colMultas = -1, colTotal = -1
 
   for (const row of rows) {
     // Detect new header row
@@ -131,8 +128,6 @@ export function parsePagos(buffer: ArrayBuffer): RawPago[] {
       colTemps   = h.findIndex(v => /temporadas/.test(v) && !/monto/.test(v))
       colMonto   = h.findIndex(v => /monto/.test(v))
       colMultas  = h.findIndex(v => v === 'multas')
-      colCuota   = h.findIndex(v => /cuota/.test(v))
-      colOtros   = h.findIndex(v => /otros/.test(v))
       colTotal   = h.findIndex(v => v === 'total')
       inSection = true
       continue
@@ -160,8 +155,6 @@ export function parsePagos(buffer: ArrayBuffer): RawPago[] {
       temporadas_pagadas: toNum(row[colTemps]) || 1,
       monto_acciones: toNum(row[colMonto]),
       multas: toNum(row[colMultas]),
-      cuota_extraordinaria: toNum(row[colCuota]),
-      otros_ingresos: toNum(row[colOtros]),
       total: toNum(row[colTotal])
     })
   }

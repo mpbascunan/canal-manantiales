@@ -10,6 +10,7 @@ import Deudores from './pages/Deudores'
 import Temporadas from './pages/Temporadas'
 import ImportarExcel from './pages/ImportarExcel'
 import Cargos from './pages/Cargos'
+import Respaldo from './pages/Respaldo'
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="temporadas" element={<Temporadas />} />
           <Route path="cargos" element={<Cargos />} />
           <Route path="importar" element={<ImportarExcel />} />
+          <Route path="respaldo" element={<Respaldo />} />
         </Route>
       </Routes>
     </HashRouter>

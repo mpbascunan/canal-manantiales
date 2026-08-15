@@ -61,7 +61,7 @@ export default function Accionistas() {
 
   const openNew = () => {
     setEditing({
-      nombre: '', apellido_paterno: '', apellido_materno: '', numero_socio: '',
+      nombre: '', apellido_paterno: '', apellido_materno: '', rut: '', numero_socio: '',
       activo: true, notas: '',
       propiedades: [{ numero: '', tipo: 'PARCELA', acciones: 0, hectareas: 0, direccion: '', marco: '' }]
     })
@@ -80,7 +80,7 @@ export default function Accionistas() {
     setEditing({
       id: a.id, nombre: a.nombre,
       apellido_paterno: a.apellido_paterno ?? '', apellido_materno: a.apellido_materno ?? '',
-      numero_socio: a.numero_socio ?? '', activo: a.activo, notas: a.notas ?? '', propiedades
+      rut: a.rut ?? '', numero_socio: a.numero_socio ?? '', activo: a.activo, notas: a.notas ?? '', propiedades
     })
     setIsNew(false)
   }
@@ -91,6 +91,7 @@ export default function Accionistas() {
       id: editing.id, nombre: editing.nombre,
       apellido_paterno: editing.apellido_paterno || null,
       apellido_materno: editing.apellido_materno || null,
+      rut: editing.rut || null,
       numero_socio: editing.numero_socio || null,
       activo: editing.activo, notas: editing.notas || null,
       propiedades: editing.propiedades.map(p => ({

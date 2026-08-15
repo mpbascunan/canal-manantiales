@@ -57,7 +57,11 @@ export default function ImportarExcel() {
 
   const readExcel = async (filePath: string): Promise<ArrayBuffer> => {
     const data: Uint8Array = await api.import.readFile(filePath)
-    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+    // Copy into a standalone ArrayBuffer — data.buffer is typed ArrayBufferLike,
+    // which xlsx will not accept.
+    const buffer = new ArrayBuffer(data.byteLength)
+    new Uint8Array(buffer).set(data)
+    return buffer
   }
 
   // ── ACCIONISTAS ──────────────────────────────────────────────────────────────

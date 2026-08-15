@@ -20,7 +20,7 @@ const PROPS_AGG = `
 `
 
 const ACCIONISTA_COLS = `
-  a.id, a.nombre, a.apellido_paterno, a.apellido_materno, a.numero_socio, a.activo, a.notas,
+  a.id, a.nombre, a.apellido_paterno, a.apellido_materno, a.rut, a.numero_socio, a.activo, a.notas,
   COALESCE(pt.total_acciones, 0)   AS acciones,
   COALESCE(pt.total_hectareas, 0) AS hectareas,
   pf.tipo                          AS tipo,
@@ -51,13 +51,14 @@ export function registerAccionistaHandlers(): void {
     const id = db.transaction(() => {
       const r = db
         .prepare(
-          `INSERT INTO accionistas (nombre, apellido_paterno, apellido_materno, numero_socio, activo, notas)
-           VALUES (@nombre, @apellido_paterno, @apellido_materno, @numero_socio, @activo, @notas)`
+          `INSERT INTO accionistas (nombre, apellido_paterno, apellido_materno, rut, numero_socio, activo, notas)
+           VALUES (@nombre, @apellido_paterno, @apellido_materno, @rut, @numero_socio, @activo, @notas)`
         )
         .run({
           nombre: input.nombre,
           apellido_paterno: input.apellido_paterno ?? null,
           apellido_materno: input.apellido_materno ?? null,
+          rut: input.rut ?? null,
           numero_socio: input.numero_socio ?? null,
           activo: input.activo ? 1 : 0,
           notas: input.notas ?? null
@@ -82,13 +83,14 @@ export function registerAccionistaHandlers(): void {
     db.transaction(() => {
       db.prepare(
         `UPDATE accionistas SET nombre=@nombre, apellido_paterno=@apellido_paterno, apellido_materno=@apellido_materno,
-         numero_socio=@numero_socio, activo=@activo, notas=@notas
+         rut=@rut, numero_socio=@numero_socio, activo=@activo, notas=@notas
          WHERE id=@id`
       ).run({
         id: input.id,
         nombre: input.nombre,
         apellido_paterno: input.apellido_paterno ?? null,
         apellido_materno: input.apellido_materno ?? null,
+        rut: input.rut ?? null,
         numero_socio: input.numero_socio ?? null,
         activo: input.activo ? 1 : 0,
         notas: input.notas ?? null

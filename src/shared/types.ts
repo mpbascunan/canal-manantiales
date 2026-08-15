@@ -40,6 +40,7 @@ export interface Accionista {
   nombre: string
   apellido_paterno: string | null
   apellido_materno: string | null
+  rut: string | null
   numero_socio: string | null
   tipo: AccionistaType    // primary tipo (first propiedad or legacy)
   acciones: number        // total from all propiedades (or legacy)
@@ -53,6 +54,7 @@ export interface AccionistaInput {
   nombre: string
   apellido_paterno?: string | null
   apellido_materno?: string | null
+  rut?: string | null
   numero_socio?: string | null
   activo: boolean
   notas?: string | null

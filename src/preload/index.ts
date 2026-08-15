@@ -62,6 +62,11 @@ const api = {
     listByAccionista: (accionistaId: number, temporadaId: number) => ipcRenderer.invoke('cargos:list-by-accionista', accionistaId, temporadaId),
     resumenByTemporada: (temporadaId: number) => ipcRenderer.invoke('cargos:resumen-by-temporada', temporadaId)
   },
+  // Respaldo
+  respaldo: {
+    info: () => ipcRenderer.invoke('respaldo:info'),
+    exportar: () => ipcRenderer.invoke('respaldo:exportar')
+  },
   // Import
   import: {
     selectFile: () => ipcRenderer.invoke('import:select-file'),

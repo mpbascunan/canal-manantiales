@@ -6,6 +6,9 @@ out/
 release/
 dist/
 
+# TypeScript incremental build cache (composite projects)
+*.tsbuildinfo
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -88,7 +88,9 @@ export function registerImportHandlers(): void {
     return { new_accionistas, new_propiedades, duplicates }
   })
 
-  ipcMain.handle('import:preview-pagos', (_e, rows: any[], temporadaId: number): PagosPreview => {
+  // temporadaId is part of the channel signature but unused: duplicates are
+  // detected by numero_ingreso, which is unique across seasons.
+  ipcMain.handle('import:preview-pagos', (_e, rows: any[], _temporadaId: number): PagosPreview => {
     const db = getDb()
     const findAccionista = db.prepare('SELECT id FROM accionistas WHERE LOWER(TRIM(nombre)) = ? LIMIT 1')
     const existsPago = db.prepare('SELECT id FROM pagos WHERE numero_ingreso = ?')

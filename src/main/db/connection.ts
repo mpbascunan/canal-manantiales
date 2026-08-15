@@ -7,7 +7,7 @@ let db: Database.Database
 
 // Must match the highest version handled in runMigrations(). A database created
 // from SCHEMA below is already at this version and must skip all migrations.
-const LATEST_VERSION = 11
+const LATEST_VERSION = 12
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS temporadas (
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS accionistas (
   nombre           TEXT    NOT NULL,
   apellido_paterno TEXT,
   apellido_materno TEXT,
+  rut              TEXT,
   numero_socio     TEXT,
   activo           INTEGER NOT NULL DEFAULT 1,
   notas            TEXT
@@ -299,8 +300,8 @@ function runMigrations(database: Database.Database, dbPath: string): void {
     // v5: Drop legacy acciones/hectareas from accionistas.
     // All values are now sourced exclusively from propiedades.
     database.transaction(() => {
-      database.prepare('ALTER TABLE accionistas DROP COLUMN acciones').run()
-      database.prepare('ALTER TABLE accionistas DROP COLUMN hectareas').run()
+      if (hasColumn(database, 'accionistas', 'acciones'))  database.prepare('ALTER TABLE accionistas DROP COLUMN acciones').run()
+      if (hasColumn(database, 'accionistas', 'hectareas')) database.prepare('ALTER TABLE accionistas DROP COLUMN hectareas').run()
     })()
     database.pragma('user_version = 5')
   }
@@ -308,8 +309,8 @@ function runMigrations(database: Database.Database, dbPath: string): void {
   if (version < 6) {
     // v6: Add per-season payment deadline and fine rate to temporadas.
     database.transaction(() => {
-      database.prepare('ALTER TABLE temporadas ADD COLUMN fecha_multa DATE NULL').run()
-      database.prepare('ALTER TABLE temporadas ADD COLUMN monto_multa_por_accion REAL NOT NULL DEFAULT 0').run()
+      if (!hasColumn(database, 'temporadas', 'fecha_multa'))            database.prepare('ALTER TABLE temporadas ADD COLUMN fecha_multa DATE NULL').run()
+      if (!hasColumn(database, 'temporadas', 'monto_multa_por_accion')) database.prepare('ALTER TABLE temporadas ADD COLUMN monto_multa_por_accion REAL NOT NULL DEFAULT 0').run()
     })()
     database.pragma('user_version = 6')
   }
@@ -317,13 +318,13 @@ function runMigrations(database: Database.Database, dbPath: string): void {
   if (version < 7) {
     // v7: Split accionista name; add numero_socio; add property address fields; clear numero_ingreso data.
     database.transaction(() => {
-      database.prepare('ALTER TABLE accionistas ADD COLUMN apellido_paterno TEXT').run()
-      database.prepare('ALTER TABLE accionistas ADD COLUMN apellido_materno TEXT').run()
-      database.prepare('ALTER TABLE accionistas ADD COLUMN numero_socio TEXT').run()
-      database.prepare('ALTER TABLE propiedades ADD COLUMN direccion TEXT').run()
-      database.prepare('ALTER TABLE propiedades ADD COLUMN sector TEXT').run()
-      database.prepare('ALTER TABLE propiedades ADD COLUMN comuna TEXT').run()
-      database.prepare('ALTER TABLE propiedades ADD COLUMN marco TEXT').run()
+      if (!hasColumn(database, 'accionistas', 'apellido_paterno')) database.prepare('ALTER TABLE accionistas ADD COLUMN apellido_paterno TEXT').run()
+      if (!hasColumn(database, 'accionistas', 'apellido_materno')) database.prepare('ALTER TABLE accionistas ADD COLUMN apellido_materno TEXT').run()
+      if (!hasColumn(database, 'accionistas', 'numero_socio'))     database.prepare('ALTER TABLE accionistas ADD COLUMN numero_socio TEXT').run()
+      if (!hasColumn(database, 'propiedades', 'direccion'))        database.prepare('ALTER TABLE propiedades ADD COLUMN direccion TEXT').run()
+      if (!hasColumn(database, 'propiedades', 'sector'))           database.prepare('ALTER TABLE propiedades ADD COLUMN sector TEXT').run()
+      if (!hasColumn(database, 'propiedades', 'comuna'))           database.prepare('ALTER TABLE propiedades ADD COLUMN comuna TEXT').run()
+      if (!hasColumn(database, 'propiedades', 'marco'))            database.prepare('ALTER TABLE propiedades ADD COLUMN marco TEXT').run()
       database.prepare('UPDATE pagos SET numero_ingreso = 0').run()
       database.prepare('UPDATE abonos SET numero_ingreso = 0').run()
     })()
@@ -333,7 +334,9 @@ function runMigrations(database: Database.Database, dbPath: string): void {
   if (version < 8) {
     // v8: Add tipo_tarifa to cargos — 'proporcional' (default) or 'fija'.
     database.transaction(() => {
-      database.prepare("ALTER TABLE cargos ADD COLUMN tipo_tarifa TEXT NOT NULL DEFAULT 'proporcional'").run()
+      if (!hasColumn(database, 'cargos', 'tipo_tarifa')) {
+        database.prepare("ALTER TABLE cargos ADD COLUMN tipo_tarifa TEXT NOT NULL DEFAULT 'proporcional'").run()
+      }
     })()
     database.pragma('user_version = 8')
   }
@@ -341,10 +344,8 @@ function runMigrations(database: Database.Database, dbPath: string): void {
   if (version < 9) {
     // v9: Drop legacy numero/tipo from accionistas — all data lives in propiedades.
     database.transaction(() => {
-      const cols = database.prepare('PRAGMA table_info(accionistas)').all() as { name: string }[]
-      const names = cols.map(c => c.name)
-      if (names.includes('numero')) database.prepare('ALTER TABLE accionistas DROP COLUMN numero').run()
-      if (names.includes('tipo'))   database.prepare('ALTER TABLE accionistas DROP COLUMN tipo').run()
+      if (hasColumn(database, 'accionistas', 'numero')) database.prepare('ALTER TABLE accionistas DROP COLUMN numero').run()
+      if (hasColumn(database, 'accionistas', 'tipo'))   database.prepare('ALTER TABLE accionistas DROP COLUMN tipo').run()
     })()
     database.pragma('user_version = 9')
   }
@@ -353,16 +354,11 @@ function runMigrations(database: Database.Database, dbPath: string): void {
     // v10: Drop cuota_extraordinaria and otros_ingresos from pagos, abonos, deudores_config.
     // These are now represented exclusively as user-created cargos.
     database.transaction(() => {
-      const check = (table: string, col: string) => {
-        const cols = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
-        return cols.some(c => c.name === col)
+      for (const table of ['pagos', 'abonos', 'deudores_config']) {
+        for (const col of ['cuota_extraordinaria', 'otros_ingresos']) {
+          if (hasColumn(database, table, col)) database.prepare(`ALTER TABLE ${table} DROP COLUMN ${col}`).run()
+        }
       }
-      if (check('pagos', 'cuota_extraordinaria'))          database.prepare('ALTER TABLE pagos           DROP COLUMN cuota_extraordinaria').run()
-      if (check('pagos', 'otros_ingresos'))                database.prepare('ALTER TABLE pagos           DROP COLUMN otros_ingresos').run()
-      if (check('abonos', 'cuota_extraordinaria'))         database.prepare('ALTER TABLE abonos          DROP COLUMN cuota_extraordinaria').run()
-      if (check('abonos', 'otros_ingresos'))               database.prepare('ALTER TABLE abonos          DROP COLUMN otros_ingresos').run()
-      if (check('deudores_config', 'cuota_extraordinaria')) database.prepare('ALTER TABLE deudores_config DROP COLUMN cuota_extraordinaria').run()
-      if (check('deudores_config', 'otros_ingresos'))      database.prepare('ALTER TABLE deudores_config DROP COLUMN otros_ingresos').run()
     })()
     database.pragma('user_version = 10')
   }
@@ -370,23 +366,50 @@ function runMigrations(database: Database.Database, dbPath: string): void {
   if (version < 11) {
     // v11: Drop sector/comuna from propiedades — no longer used.
     database.transaction(() => {
-      const cols = database.prepare('PRAGMA table_info(propiedades)').all() as { name: string }[]
-      const names = cols.map(c => c.name)
-      if (names.includes('sector')) database.prepare('ALTER TABLE propiedades DROP COLUMN sector').run()
-      if (names.includes('comuna')) database.prepare('ALTER TABLE propiedades DROP COLUMN comuna').run()
+      if (hasColumn(database, 'propiedades', 'sector')) database.prepare('ALTER TABLE propiedades DROP COLUMN sector').run()
+      if (hasColumn(database, 'propiedades', 'comuna')) database.prepare('ALTER TABLE propiedades DROP COLUMN comuna').run()
     })()
     database.pragma('user_version = 11')
   }
+
+  if (version < 12) {
+    // v12: Add rut to accionistas.
+    database.transaction(() => {
+      if (!hasColumn(database, 'accionistas', 'rut')) database.prepare('ALTER TABLE accionistas ADD COLUMN rut TEXT').run()
+    })()
+    database.pragma('user_version = 12')
+  }
+}
+
+export function getDbPath(): string {
+  return join(app.getPath('userData'), 'canal.db')
 }
 
 export function getDb(): Database.Database {
   if (!db) {
-    const dbPath = join(app.getPath('userData'), 'canal.db')
-    db = new Database(dbPath)
-    db.pragma('journal_mode = WAL')
-    db.pragma('foreign_keys = ON')
-    db.exec(SCHEMA)
-    runMigrations(db)
+    const dbPath = getDbPath()
+    const database = new Database(dbPath)
+    database.pragma('journal_mode = WAL')
+    database.pragma('foreign_keys = ON')
+
+    const isNew =
+      (database
+        .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .get() as { n: number }).n === 0
+
+    database.exec(SCHEMA)
+
+    if (isNew) {
+      // SCHEMA already describes the latest shape, so the historical migrations
+      // have nothing to do here — and several would fail against it.
+      database.pragma(`user_version = ${LATEST_VERSION}`)
+    } else {
+      runMigrations(database, dbPath)
+    }
+
+    // Assigned last: if setup throws, the next call retries from scratch instead
+    // of handing out a half-migrated connection.
+    db = database
   }
   return db
 }

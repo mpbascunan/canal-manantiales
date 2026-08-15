@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { api } from '../lib/ipc'
 import type { Temporada } from '../../../shared/types'
@@ -12,12 +12,12 @@ const navItems = [
   { to: '/deudores', icon: '⚠', label: 'Deudores' },
   { to: '/cargos', icon: '⊕', label: 'Cargos' },
   { to: '/temporadas', icon: '◷', label: 'Temporadas' },
-  { to: '/importar', icon: '↑', label: 'Importar Excel' }
+  { to: '/importar', icon: '↑', label: 'Importar Excel' },
+  { to: '/respaldo', icon: '⛁', label: 'Respaldo' }
 ]
 
 export default function Layout() {
   const [temporada, setTemporada] = useState<Temporada | null>(null)
-  const navigate = useNavigate()
 
   useEffect(() => {
     api.temporadas.getActive().then(setTemporada)
@@ -59,7 +59,7 @@ export default function Layout() {
         </nav>
 
         <div className="px-4 py-3 border-t border-slate-700 text-xs text-slate-500">
-          v1.0.0
+          v{__APP_VERSION__}
         </div>
       </aside>
 

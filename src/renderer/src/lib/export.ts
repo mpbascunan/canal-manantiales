@@ -110,7 +110,7 @@ export function exportPagosMesPdf(pagos: Pago[], year: number, month: number): v
     startY: 26,
     head: [['Fecha', 'N°', 'Accionista', 'Temporadas', 'Monto Acciones', 'Multas', 'Total']],
     body: pagos.map(p => [
-      formatFecha(p.fecha), p.numero_ingreso, p.accionista_nombre,
+      formatFecha(p.fecha), p.numero_ingreso, p.accionista_nombre ?? '',
       p.temporadas_pagadas, formatCLP(p.monto_acciones),
       formatCLP(p.multas), formatCLP(p.total)
     ]),
@@ -321,7 +321,7 @@ export function previewAvisoCobro(
   cargosAviso: AvisoCargo[] = []
 ): string {
   const doc = buildAvisosCobroDoc(accionistas, temporada, valorAccion, multaVencimiento, propiedades, cargosAviso)
-  return doc.output('bloburl') as string
+  return doc.output('bloburl').toString()
 }
 
 export function exportAvisosCobro(

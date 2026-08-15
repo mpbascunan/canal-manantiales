@@ -79,10 +79,8 @@ function BarChart({ data }: { data: ResumenMensual[] }) {
     >
       {data.map((d, i) => {
         const x = i * (barW + gap) + 20
-        const totalH = (d.total / maxTotal) * chartH
         const accH  = (d.monto_acciones / maxTotal) * chartH
         const multH = (d.multas / maxTotal) * chartH
-        const y = chartH - totalH
         let stackY = chartH
 
         return (

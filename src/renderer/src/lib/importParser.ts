@@ -114,7 +114,7 @@ export function parsePagos(buffer: ArrayBuffer): RawPago[] {
   // Find header rows (FECHA, N° INGRESO, ACCIONISTA, ...)
   const headerPattern = /^fecha$/i
   let inSection = false
-  let colFecha = -1, colIngreso = -1, colAcc = -1, colHect = -1,
+  let colFecha = -1, colIngreso = -1, colAcc = -1,
       colTemps = -1, colMonto = -1, colMultas = -1, colTotal = -1
 
   for (const row of rows) {
@@ -124,7 +124,6 @@ export function parsePagos(buffer: ArrayBuffer): RawPago[] {
       colFecha   = h.findIndex(v => v === 'fecha')
       colIngreso = h.findIndex(v => /ingreso/.test(v))
       colAcc     = h.findIndex(v => /accionista/.test(v))
-      colHect    = h.findIndex(v => /hectarea/.test(v))
       colTemps   = h.findIndex(v => /temporadas/.test(v) && !/monto/.test(v))
       colMonto   = h.findIndex(v => /monto/.test(v))
       colMultas  = h.findIndex(v => v === 'multas')

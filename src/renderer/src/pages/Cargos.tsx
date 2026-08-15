@@ -173,7 +173,6 @@ export default function Cargos() {
 
   // ── Summary stats ──────────────────────────────────────────────────────────
   const totalMonto = cargos.reduce((s, c) => s + (c.total_monto ?? 0), 0)
-  const totalPagado = cargos.reduce((s, c) => s + ((c.pagados_count ?? 0) / Math.max(c.accionista_count ?? 1, 1)) * (c.total_monto ?? 0), 0)
 
   const activeTemporada = temporadas.find(t => t.id === selectedTemporadaId)
 

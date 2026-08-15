@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AccionistaType, PropiedadInput } from '../../../shared/types'
+import { formatRut, isValidRut } from '../lib/rut'
 
 const DEFAULT_DIRECCIONES = ['Rinconada de manantiales', 'La tuna', 'Las canchillas']
 const DEFAULT_MARCOS = [
@@ -96,6 +97,7 @@ export interface AccionistaEditForm {
   nombre: string
   apellido_paterno: string
   apellido_materno: string
+  rut: string
   numero_socio: string
   activo: boolean
   notas: string
@@ -106,6 +108,7 @@ export const EMPTY_ACCIONISTA_FORM: AccionistaEditForm = {
   nombre: '',
   apellido_paterno: '',
   apellido_materno: '',
+  rut: '',
   numero_socio: '',
   activo: true,
   notas: '',
@@ -120,6 +123,9 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
   onClose: () => void
 }) {
   const set = (patch: Partial<AccionistaEditForm>) => onChange({ ...value, ...patch })
+
+  // RUT is optional, but if entered it must pass the módulo 11 check.
+  const rutIsValid = value.rut.trim() === '' || isValidRut(value.rut)
 
   const setPropiedad = (i: number, patch: Partial<PropiedadInput>) => {
     const props = value.propiedades.map((p, j) => j === i ? { ...p, ...patch } : p)
@@ -160,8 +166,20 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
             </div>
           </div>
 
-          {/* Número socio */}
+          {/* RUT y número socio */}
           <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="label">RUT</label>
+              <input
+                className={`input ${rutIsValid ? '' : 'border-red-400 focus:ring-red-400'}`}
+                value={value.rut}
+                onChange={e => set({ rut: e.target.value.replace(/[^0-9kK.\-]/g, '') })}
+                onBlur={e => set({ rut: formatRut(e.target.value) })}
+                placeholder="Ej: 12.345.678-9"
+                aria-invalid={!rutIsValid}
+              />
+              {!rutIsValid && <p className="text-xs text-red-500 mt-0.5">RUT inválido</p>}
+            </div>
             <div>
               <label className="label">Número socio</label>
               <input className="input" value={value.numero_socio} onChange={e => set({ numero_socio: e.target.value })} placeholder="Ej: 042" />
@@ -281,7 +299,14 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
 
         <div className="flex justify-end gap-2 mt-5">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" onClick={onSave}>Guardar</button>
+          <button
+            className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={onSave}
+            disabled={!rutIsValid}
+            title={rutIsValid ? undefined : 'Corrige el RUT para guardar'}
+          >
+            Guardar
+          </button>
         </div>
       </div>
     </div>

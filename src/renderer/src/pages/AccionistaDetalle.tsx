@@ -71,7 +71,8 @@ export default function AccionistaDetalle() {
     setEditForm({
       id: accionista.id, nombre: accionista.nombre,
       apellido_paterno: accionista.apellido_paterno ?? '', apellido_materno: accionista.apellido_materno ?? '',
-      numero_socio: accionista.numero_socio ?? '', activo: accionista.activo, notas: accionista.notas ?? '', propiedades
+      rut: accionista.rut ?? '', numero_socio: accionista.numero_socio ?? '',
+      activo: accionista.activo, notas: accionista.notas ?? '', propiedades
     })
   }
 
@@ -81,6 +82,7 @@ export default function AccionistaDetalle() {
       id: editForm.id!, nombre: editForm.nombre,
       apellido_paterno: editForm.apellido_paterno || null,
       apellido_materno: editForm.apellido_materno || null,
+      rut: editForm.rut || null,
       numero_socio: editForm.numero_socio || null,
       activo: editForm.activo, notas: editForm.notas || null,
       propiedades: editForm.propiedades.map(p => ({
@@ -163,8 +165,13 @@ export default function AccionistaDetalle() {
             </div>
           )}
           <h1 className="text-xl font-bold text-gray-900">{nombreCompleto(accionista)}</h1>
-          {accionista.numero_socio && (
-            <p className="text-xs text-gray-400 mt-0.5">N° socio: {accionista.numero_socio}</p>
+          {(accionista.rut || accionista.numero_socio) && (
+            <p className="text-xs text-gray-400 mt-0.5">
+              {[
+                accionista.rut && `RUT: ${accionista.rut}`,
+                accionista.numero_socio && `N° socio: ${accionista.numero_socio}`
+              ].filter(Boolean).join(' · ')}
+            </p>
           )}
           <div className="flex gap-6 mt-3 text-sm text-gray-600">
             {accionista.acciones > 0 && (

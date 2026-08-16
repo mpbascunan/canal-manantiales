@@ -57,17 +57,24 @@ export interface AbonoAplicable {
  * administration's records (D14). It is never recalculated — the figure is the
  * fact — but it is the oldest debt there is, so abonos consume it first.
  */
+import type { TipoDeudaInicial } from './types'
+
+/** Charging order inside the pre-app debt: cuota, then otros, then multa. */
+export const ORDEN_TIPO_DEUDA: Record<TipoDeudaInicial, number> = {
+  CUOTA: 0, OTRO: 1, MULTA: 2
+}
+
 export interface DeudaInicialLinea {
   id: number
   concepto: string
-  tipo: 'CUOTA' | 'MULTA'
+  tipo: TipoDeudaInicial
   monto: number
 }
 
 export interface DeudaInicialBreakdown {
   id: number
   concepto: string
-  tipo: 'CUOTA' | 'MULTA'
+  tipo: TipoDeudaInicial
   monto: number
   abonado: number
   pendiente: number
@@ -194,12 +201,12 @@ export function calcularDeudaPorTemporada(
   }
 
   // Pre-app debt is older than every temporada, so it is served first (D14).
-  // CUOTA lines before MULTA lines, for the same reason a temporada's cuota
-  // comes before its multa (D3). These amounts are never recomputed — they were
-  // transcribed from the administration's records, not derived.
+  // Within it, cuota before otros before multa — the same order a temporada
+  // charges in (D3). These amounts are never recomputed: they were transcribed
+  // from the administration's records, not derived.
   const inicialOrdenada = [...deudaInicial].sort((a, b) => {
-    if (a.tipo !== b.tipo) return a.tipo === 'CUOTA' ? -1 : 1
-    return a.id - b.id
+    const rango = ORDEN_TIPO_DEUDA[a.tipo] - ORDEN_TIPO_DEUDA[b.tipo]
+    return rango !== 0 ? rango : a.id - b.id
   })
 
   const deuda_inicial: DeudaInicialBreakdown[] = inicialOrdenada.map(linea => {

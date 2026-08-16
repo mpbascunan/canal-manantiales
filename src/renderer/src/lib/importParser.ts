@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx'
-import type { AccionistaType } from '../../../shared/types'
+import type { AccionistaType, TipoDeudaInicial } from '../../../shared/types'
+import { DEUDA_TIPO_CONCEPTO } from './labels'
 
 /**
  * One property line off the association's "Listado de Accionistas" workbook.
@@ -74,7 +75,7 @@ export interface RawDeudaInicial {
   numero_socio: string | null
   accionista_nombre: string
   concepto: string
-  tipo: 'CUOTA' | 'MULTA'
+  tipo: TipoDeudaInicial
   monto: number
   /** 1-based row in the sheet, so the preview can point at what it could not read. */
   fila: number
@@ -356,8 +357,8 @@ export function parsePagos(buffer: ArrayBuffer): PagosParseResult {
  *
  * Two layouts are accepted, because the administration's file may be either:
  *
- *   1. One row per accionista, with a `multa` column and optionally a `cuota`
- *      column — each non-zero amount becomes its own line.
+ *   1. One row per accionista, with `cuota`, `otro` and `multa` columns — each
+ *      non-zero amount becomes its own line.
  *   2. One row per line, with a single `monto` column and a `tipo` column
  *      saying whether it is a cuota or a multa.
  *
@@ -371,7 +372,7 @@ export function parseDeudaInicial(buffer: ArrayBuffer): RawDeudaInicial[] {
   const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
 
   let colSocio = -1, colNombre = -1, colConcepto = -1, colTipo = -1
-  let colMonto = -1, colMulta = -1, colCuota = -1
+  let colMonto = -1, colMulta = -1, colCuota = -1, colOtro = -1
   let headerRow = -1
 
   for (let i = 0; i < rows.length; i++) {
@@ -386,7 +387,9 @@ export function parseDeudaInicial(buffer: ArrayBuffer): RawDeudaInicial[] {
     // "monto multa" must not also register as the generic monto column.
     colMulta    = h.findIndex(v => /multa/.test(v))
     colCuota    = h.findIndex(v => /cuota/.test(v))
-    colMonto    = h.findIndex(v => /^(monto|total|deuda|saldo)/.test(v) && !/multa|cuota/.test(v))
+    colOtro     = h.findIndex(v => /^otros?\b/.test(v))
+    colMonto    = h.findIndex(v =>
+      /^(monto|total|deuda|saldo)/.test(v) && !/multa|cuota|otros?/.test(v))
     headerRow   = i
     break
   }
@@ -405,7 +408,7 @@ export function parseDeudaInicial(buffer: ArrayBuffer): RawDeudaInicial[] {
     const conceptoCell = colConcepto === -1 ? '' : cleanName(row[colConcepto])
     const fila = i + 1
 
-    const push = (tipo: 'CUOTA' | 'MULTA', monto: number, fallback: string): void => {
+    const push = (tipo: TipoDeudaInicial, monto: number, fallback: string): void => {
       if (monto <= 0) return
       results.push({
         numero_socio: socio,
@@ -417,17 +420,22 @@ export function parseDeudaInicial(buffer: ArrayBuffer): RawDeudaInicial[] {
       })
     }
 
-    // Layout 2 — a single amount, typed by a `tipo` column.
-    if (colMonto !== -1 && colMulta === -1 && colCuota === -1) {
+    // Layout 2 — a single amount, typed by a `tipo` column. Anything the column
+    // does not name as a cuota or an otro is a multa, as it always was.
+    if (colMonto !== -1 && colMulta === -1 && colCuota === -1 && colOtro === -1) {
       const declarado = colTipo === -1 ? '' : String(row[colTipo] ?? '').toUpperCase()
-      const tipo: 'CUOTA' | 'MULTA' = declarado.includes('CUOTA') ? 'CUOTA' : 'MULTA'
-      push(tipo, toNum(row[colMonto]), tipo === 'CUOTA' ? 'Cuota temporadas anteriores' : 'Multa temporadas anteriores')
+      const tipo: TipoDeudaInicial =
+        declarado.includes('CUOTA') ? 'CUOTA'
+        : declarado.includes('OTRO') ? 'OTRO'
+        : 'MULTA'
+      push(tipo, toNum(row[colMonto]), DEUDA_TIPO_CONCEPTO[tipo])
       continue
     }
 
     // Layout 1 — separate columns, each becoming its own line.
-    if (colCuota !== -1) push('CUOTA', toNum(row[colCuota]), 'Cuota temporadas anteriores')
-    if (colMulta !== -1) push('MULTA', toNum(row[colMulta]), 'Multa temporadas anteriores')
+    if (colCuota !== -1) push('CUOTA', toNum(row[colCuota]), DEUDA_TIPO_CONCEPTO.CUOTA)
+    if (colOtro  !== -1) push('OTRO',  toNum(row[colOtro]),  DEUDA_TIPO_CONCEPTO.OTRO)
+    if (colMulta !== -1) push('MULTA', toNum(row[colMulta]), DEUDA_TIPO_CONCEPTO.MULTA)
   }
 
   return results

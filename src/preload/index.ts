@@ -51,12 +51,14 @@ const api = {
     upsertConfig: (cfg: any) => ipcRenderer.invoke('deudores:upsert-config', cfg),
     getDeuda: (accionistaId: number, hoy?: string) =>
       ipcRenderer.invoke('deudores:get-deuda', accionistaId, hoy),
-    listDeuda: (hoy?: string) => ipcRenderer.invoke('deudores:list-deuda', hoy)
+    listDeuda: (hoy?: string, incluirSinDeuda?: boolean) =>
+      ipcRenderer.invoke('deudores:list-deuda', hoy, incluirSinDeuda)
   },
   // Deuda inicial — debt carried in from before the app existed
   deudaInicial: {
     previewImport: (rows: any[]) => ipcRenderer.invoke('import:preview-deuda-inicial', rows),
-    import: (rows: any[]) => ipcRenderer.invoke('import:deuda-inicial', rows),
+    import: (rows: any[], asignaciones: Record<string, number> = {}) =>
+      ipcRenderer.invoke('import:deuda-inicial', rows, asignaciones),
     list: () => ipcRenderer.invoke('deuda-inicial:list'),
     listByAccionista: (accionistaId: number) =>
       ipcRenderer.invoke('deuda-inicial:list-by-accionista', accionistaId),

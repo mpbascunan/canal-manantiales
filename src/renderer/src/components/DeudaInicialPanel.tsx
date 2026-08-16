@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/ipc'
 import { formatCLP } from '../lib/formulas'
-import type { DeudaInicial } from '../../../shared/types'
+import type { DeudaInicial, TipoDeudaInicial } from '../../../shared/types'
+import { DEUDA_TIPO_CONCEPTO, DEUDA_TIPO_LABELS } from '../lib/labels'
 
 interface Linea {
   concepto: string
-  tipo: 'CUOTA' | 'MULTA'
+  tipo: TipoDeudaInicial
   monto: string
 }
 
@@ -58,7 +59,7 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
       .filter(l => Number(l.monto) > 0)
       .map(l => ({
         accionista_id: accionistaId,
-        concepto: l.concepto.trim() || (l.tipo === 'CUOTA' ? 'Cuota temporadas anteriores' : 'Multa temporadas anteriores'),
+        concepto: l.concepto.trim() || DEUDA_TIPO_CONCEPTO[l.tipo],
         tipo: l.tipo,
         monto: Number(l.monto),
         notas: null
@@ -119,7 +120,7 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
             {lineas.map(l => (
               <tr key={l.id} className="table-row">
                 <td className="px-4 py-2">{l.concepto}</td>
-                <td className="px-4 py-2 text-gray-500">{l.tipo === 'CUOTA' ? 'Cuota' : 'Multa'}</td>
+                <td className="px-4 py-2"><TipoDeudaTag tipo={l.tipo} /></td>
                 <td className="px-4 py-2 text-right tabular-nums">{formatCLP(l.monto)}</td>
               </tr>
             ))}
@@ -143,8 +144,9 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
                 value={l.tipo}
                 onChange={e => setLinea(i, { tipo: e.target.value as Linea['tipo'] })}
               >
-                <option value="MULTA">Multa</option>
                 <option value="CUOTA">Cuota</option>
+                <option value="OTRO">Otro</option>
+                <option value="MULTA">Multa</option>
               </select>
               <input
                 className="input w-32 text-right"
@@ -180,5 +182,26 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The kind of a pre-app debt line, shown next to its concepto.
+ *
+ * The concepto is free text transcribed from the administration's records, so it
+ * may or may not mention what the amount is for. The tipo is what the system
+ * actually charges on — cuota first, then otros, then multa — and it belongs on
+ * screen next to the figure it governs rather than only in the edit form.
+ */
+export function TipoDeudaTag({ tipo }: { tipo: TipoDeudaInicial }) {
+  const estilo: Record<TipoDeudaInicial, string> = {
+    CUOTA: 'bg-canal-100 text-canal-700',
+    MULTA: 'bg-red-100 text-red-700',
+    OTRO: 'bg-gray-200 text-gray-700'
+  }
+  return (
+    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium leading-none ${estilo[tipo]}`}>
+      {DEUDA_TIPO_LABELS[tipo]}
+    </span>
   )
 }

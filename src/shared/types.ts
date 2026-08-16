@@ -129,6 +129,13 @@ export interface DeudorConfig {
 }
 
 /**
+ * What a line of pre-app debt is for. `OTRO` covers anything that is neither the
+ * season's fee nor a fine — a share of works, an agreed settlement — and is
+ * charged between the two, the position a cargo holds inside a temporada.
+ */
+export type TipoDeudaInicial = 'CUOTA' | 'MULTA' | 'OTRO'
+
+/**
  * One line of debt carried in from before the app existed, transcribed from the
  * administration's records (context.md D14). Never recalculated; how much of it
  * is still owed comes from the abono allocation, not from a stored flag.
@@ -138,7 +145,7 @@ export interface DeudaInicial {
   accionista_id: number
   /** Free text, e.g. "Multa temporada 2024-2025". Shown on the aviso. */
   concepto: string
-  tipo: 'CUOTA' | 'MULTA'
+  tipo: TipoDeudaInicial
   monto: number
   notas: string | null
   created_at: string

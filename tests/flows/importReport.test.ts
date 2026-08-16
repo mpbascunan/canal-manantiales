@@ -2,7 +2,9 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import * as XLSX from 'xlsx'
 import {
-  armarNoImportados, buildNoImportadosWorkbook, type ResumenNoImportado
+  armarDeudaNoImportada, armarNoImportados,
+  buildDeudaNoImportadaWorkbook, buildNoImportadosWorkbook,
+  type LineaDeudaRechazada, type ResumenDeudaNoImportada, type ResumenNoImportado
 } from '../../src/renderer/src/lib/importReport'
 
 /**
@@ -116,5 +118,84 @@ describe('reporte de filas no importadas', () => {
 
   it('produces an empty report when everything imported', () => {
     assert.deepEqual(armarNoImportados(base()), [])
+  })
+
+  describe('deuda anterior', () => {
+    const linea = (over: Partial<LineaDeudaRechazada> = {}): LineaDeudaRechazada => ({
+      fila: 5, numero_socio: null, accionista_nombre: 'María Figueroa C.',
+      concepto: 'Deuda temporada 2023-2024', tipo: 'CUOTA', monto: 480_000, ...over
+    })
+
+    const baseDeuda = (over: Partial<ResumenDeudaNoImportada> = {}): ResumenDeudaNoImportada => ({
+      sin_coincidencia: [], asignaciones: {}, errores: [], ...over
+    })
+
+    it('lists every line of an unresolved name, ordered by row', () => {
+      const filas = armarDeudaNoImportada(baseDeuda({
+        sin_coincidencia: [{
+          nombre: 'María Figueroa C.',
+          lineas: [
+            linea({ fila: 9, tipo: 'MULTA', monto: 240_000 }),
+            linea({ fila: 5, tipo: 'CUOTA', monto: 480_000 })
+          ]
+        }]
+      }))
+
+      assert.deepEqual(filas.map(f => f.fila), [5, 9])
+      assert.deepEqual(filas.map(f => f.tipo), ['Cuota', 'Multa'])
+      assert.equal(filas.every(f => f.motivo === 'Accionista no encontrado'), true)
+      assert.match(filas[0].accion, /María Figueroa C\./)
+    })
+
+    it('leaves out the names the user matched by hand', () => {
+      const filas = armarDeudaNoImportada(baseDeuda({
+        sin_coincidencia: [
+          { nombre: 'María Figueroa C.', lineas: [linea()] },
+          { nombre: 'Nadie De Nadie', lineas: [linea({ fila: 7, accionista_nombre: 'Nadie De Nadie' })] }
+        ],
+        asignaciones: { 'María Figueroa C.': 7 }
+      }))
+
+      assert.deepEqual(filas.map(f => f.accionista_nombre), ['Nadie De Nadie'])
+    })
+
+    it('writes its own columns and totals the amounts', () => {
+      const wb = buildDeudaNoImportadaWorkbook(baseDeuda({
+        sin_coincidencia: [{
+          nombre: 'María Figueroa C.',
+          lineas: [linea({ fila: 5, monto: 480_000 }), linea({ fila: 6, monto: 240_000 })]
+        }]
+      }))
+
+      const rows: any[][] = XLSX.utils.sheet_to_json(wb.Sheets['No importadas'], { header: 1, defval: null })
+      assert.equal(rows[0][0], 'DEUDA ANTERIOR NO IMPORTADA')
+
+      const totalRow = rows.find(r => r[0] === 'TOTAL')!
+      assert.deepEqual([totalRow[1], totalRow[2]], [2, 720_000])
+
+      const headerIdx = rows.findIndex(r => r[0] === 'Fila')
+      assert.deepEqual(rows[headerIdx],
+        ['Fila', 'Motivo', 'N° Socio', 'Accionista', 'Concepto', 'Tipo', 'Monto', 'Qué hacer'])
+    })
+
+    it('only reports errors the detail sheet does not already explain', () => {
+      const datos = baseDeuda({
+        sin_coincidencia: [{ nombre: 'X', lineas: [linea({ fila: 9 })] }]
+      })
+
+      const yaExplicado = buildDeudaNoImportadaWorkbook({
+        ...datos, errores: ['Fila 9: no se encontró el accionista "X"']
+      })
+      assert.deepEqual(yaExplicado.SheetNames, ['No importadas'])
+
+      const inesperado = buildDeudaNoImportadaWorkbook({
+        ...datos, errores: ['Fila 40: CHECK constraint failed']
+      })
+      assert.deepEqual(inesperado.SheetNames, ['No importadas', 'Errores'])
+    })
+
+    it('produces an empty report when everything imported', () => {
+      assert.deepEqual(armarDeudaNoImportada(baseDeuda()), [])
+    })
   })
 })

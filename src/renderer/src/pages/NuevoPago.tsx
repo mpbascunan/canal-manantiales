@@ -1,6 +1,7 @@
 import { usePagoForm } from '../lib/usePagoForm'
 import { formatCLP } from '../lib/formulas'
 import { nombreCompleto } from '../../../shared/types'
+import { DEUDA_TIPO_LABELS } from '../lib/labels'
 
 export default function NuevoPago() {
   const {
@@ -141,7 +142,7 @@ export default function NuevoPago() {
                   <div className="mt-1 space-y-0.5 text-xs text-amber-700">
                     {deuda.deuda_inicial.filter(l => l.pendiente > 0).map(l => (
                       <div key={`di-${l.id}`} className="flex justify-between gap-4">
-                        <span>{l.concepto}</span>
+                        <span>{DEUDA_TIPO_LABELS[l.tipo]} · {l.concepto}</span>
                         <span className="tabular-nums">{formatCLP(l.pendiente)}</span>
                       </div>
                     ))}

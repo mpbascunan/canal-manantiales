@@ -19,6 +19,7 @@ Este documento describe en detalle la lógica de negocio, los modelos de base de
 11. [Número de Ingreso](#11-número-de-ingreso)
 12. [Temporadas](#12-temporadas)
 13. [Resumen Contable](#13-resumen-contable)
+14. [Avisos de Cobranza](#14-avisos-de-cobranza)
 
 ---
 
@@ -395,6 +396,42 @@ Suma de todos los `monto_acciones`, `multas`, `cuota_extraordinaria`, `otros_ing
 Los mismos totales agrupados por mes, útil para informes de caja y rendición de cuentas.
 
 > **Importante:** El `total` de un pago con abonos previos ya descuenta lo abonado. Por eso, para calcular el total real recaudado en la temporada, la vista suma tanto los abonos como los pagos (no sería correcto sumar solo los pagos).
+
+---
+
+## 14. Avisos de Cobranza
+
+El **aviso de cobranza** es la hoja que se imprime y se entrega al accionista, y contra la cual paga en la oficina. Por eso **cobra toda la deuda vigente al día en que se imprime**, no solamente la cuota de la temporada activa.
+
+### Qué incluye, en este orden
+
+1. **Temporadas anteriores** — las líneas de deuda inicial (deuda anterior al sistema) que aún tengan saldo, con su tipo (Cuota / Multa / Otro) y su concepto.
+2. **Cada temporada con saldo pendiente, de la más antigua a la más nueva**, y dentro de cada una:
+   - **Cuota por acciones** — lo que queda por pagar de esa temporada, ya descontados los abonos aplicados a ella. Si hubo abonos, la línea lo indica: *"Cuota por acciones · abonado $100.000"*.
+   - **Cargos pendientes** de esa temporada (limpia de acequia, cuota extraordinaria, multa por inasistencia, etc.).
+   - **Cargos ya pagados**, en gris y sin cobrar, solo como constancia.
+   - **Multa por atraso** de esa temporada, calculada con las reglas de la temporada correspondiente.
+3. **TOTAL A PAGAR** — la suma de todas las líneas cobradas, idéntica al total pendiente que muestra la ficha del accionista y la pantalla de Deudores.
+4. **Excedente a favor**, si el accionista abonó más de lo que debía.
+5. La **nota de la temporada** (`nota_aviso`), si está configurada.
+
+Cuando el aviso incluye una sola temporada y no hay deuda anterior, se omiten los títulos por temporada: la hoja se lee como una cuenta simple.
+
+### Desglose por propiedad
+
+Si el accionista tiene **más de una propiedad** y **no ha abonado nada** contra la cuota de esa temporada, la cuota se desglosa propiedad por propiedad (*"Parcela N°8 (8 acc)"*), cerrando con un subtotal. Ese desglose es informativo: lo que se cobra es el subtotal.
+
+Si ya abonó parte de la cuota, el desglose no se imprime — repartir el saldo entre las propiedades supondría una asignación que nadie decidió. En su lugar se imprime la cuota completa de la temporada con lo abonado indicado al lado.
+
+### Dónde se genera
+
+| Pantalla | Botón | Qué imprime |
+|----------|-------|-------------|
+| Ficha del accionista | "Imprimir aviso" | Un aviso, con vista previa antes de descargar. Incluye el listado de propiedades del accionista. |
+| Inicio | "PDF Deudores" | Un aviso por cada accionista con deuda pendiente. |
+| Inicio | "PDF Todos los accionistas" | Un aviso por cada accionista activo. A quien no debe nada se le imprime igual, con la línea "Sin deuda pendiente" y total $0. |
+
+En todos los casos el aviso se arma con el mismo cálculo de deuda que usa la aplicación en pantalla (`deudores:get-deuda`), de modo que el papel y la pantalla nunca pueden mostrar cifras distintas.
 
 ---
 

@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../lib/ipc'
-import {
-  calcularMultaVencimiento, tieneMultaVencimiento,
-  formatCLP, formatFecha, formatNumber
-} from '../lib/formulas'
+import { formatCLP, formatFecha, formatNumber } from '../lib/formulas'
 import { exportAvisosCobro, previewAvisoCobro } from '../lib/export'
 import type {
   Accionista, Pago, Temporada, Propiedad, Abono, Cargo
@@ -12,28 +9,22 @@ import type {
 import type { DeudaPorTemporada } from '../../../shared/deuda'
 import { nombreCompleto } from '../../../shared/types'
 import { AccionistaModal, BLANK_PROPIEDAD, type AccionistaEditForm } from '../components/AccionistaModal'
-import { DeudaInicialPanel } from '../components/DeudaInicialPanel'
+import { DeudaInicialPanel, TipoDeudaTag } from '../components/DeudaInicialPanel'
 
 const TIPO_LABELS: Record<string, string> = {
   PARCELA: 'Parcela', SITIO: 'Sitio', 'PEQUEÑO_PROPIETARIO': 'Pequeño Propietario'
 }
 
-interface DeudorConfig {
-  temporadas_adeudadas: number
-  total_abonado: number
-  total_cargos: number
-  total_cargos_pagados: number
-}
-
 export default function AccionistaDetalle() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  // Set by whichever listing sent the user here, so "back" returns to it.
+  const origen = (useLocation().state as { from?: string } | null)?.from ?? '/accionistas'
   const [accionista, setAccionista] = useState<Accionista | null>(null)
   const [pagos, setPagos] = useState<Pago[]>([])
   const [abonos, setAbonos] = useState<Abono[]>([])
   const [propiedades, setPropiedades] = useState<Propiedad[]>([])
   const [temporada, setTemporada] = useState<Temporada | null>(null)
-  const [deudorConfig, setDeudorConfig] = useState<DeudorConfig | null>(null)
   const [cargos, setCargos] = useState<(Cargo & { monto: number; pagado: number })[]>([])
   const [editForm, setEditForm] = useState<AccionistaEditForm | null>(null)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
@@ -56,11 +47,8 @@ export default function AccionistaDetalle() {
       setPropiedades(props)
       setTemporada(t)
       setDeudaCompleta(d)
-      // Load debt config and cargos for the active temporada
-      if (t) {
-        api.deudores.getConfig(aid, t.id).then(setDeudorConfig)
-        api.cargos.listByAccionista(aid, t.id).then(setCargos)
-      }
+      // The cargos table below lists the active temporada's cargos on their own
+      if (t) api.cargos.listByAccionista(aid, t.id).then(setCargos)
     })
   }
 
@@ -106,21 +94,20 @@ export default function AccionistaDetalle() {
 
   const grandTotal = pagos.reduce((s, p) => s + p.total, 0)          + abonos.reduce((s, a) => s + a.total, 0)
 
-  // The active temporada's multa, still needed by the aviso until export.ts is
-  // rewritten to take the per-temporada breakdown.
-  const multaVencimiento = (temporada && accionista && deudorConfig && tieneMultaVencimiento(temporada))
-    ? calcularMultaVencimiento(accionista.acciones, accionista.hectareas, temporada.monto_multa_por_accion, temporada.valor_accion, deudorConfig.total_abonado)
-    : 0
+  // The aviso charges the whole outstanding balance — every temporada plus the
+  // pre-app debt, net of abonos — not just the active season's cuota (D13).
+  const destinatarioAviso = deudaCompleta
+    ? [{ accionista, deuda: deudaCompleta, propiedades }]
+    : null
 
   const handlePrintAviso = () => {
-    if (!temporada) return
-    const url = previewAvisoCobro([accionista], temporada, temporada.valor_accion, multaVencimiento, propiedades, cargos)
-    setPdfPreviewUrl(url)
+    if (!temporada || !destinatarioAviso) return
+    setPdfPreviewUrl(previewAvisoCobro(destinatarioAviso, temporada))
   }
 
   const handleDownloadAviso = () => {
-    if (!temporada) return
-    exportAvisosCobro([accionista], temporada, temporada.valor_accion, multaVencimiento, propiedades, cargos)
+    if (!temporada || !destinatarioAviso) return
+    exportAvisosCobro(destinatarioAviso, temporada)
   }
 
   const closePdfPreview = () => {
@@ -131,19 +118,15 @@ export default function AccionistaDetalle() {
   return (
     <div className="max-w-4xl space-y-6">
       <div className="flex items-center gap-3">
-        <button className="text-gray-400 hover:text-gray-600 text-sm" onClick={() => navigate('/accionistas')}>
-          ← Accionistas
+        <button className="text-gray-400 hover:text-gray-600 text-sm" onClick={() => navigate(origen)}>
+          ← {origen === '/deudores' ? 'Deudores' : 'Accionistas'}
         </button>
       </div>
 
       {/* Header card */}
       <div className="card p-5 flex items-start justify-between">
         <div>
-          {accionista.nombres_propiedades && (
-            <div className="mb-1">
-              <span className="text-gray-400 text-sm">{accionista.nombres_propiedades}</span>
-            </div>
-          )}
+          {/* The propiedades are listed in full in their own table below. */}
           <h1 className="text-xl font-bold text-gray-900">{nombreCompleto(accionista)}</h1>
           {(accionista.rut || accionista.numero_socio) && (
             <p className="text-xs text-gray-400 mt-0.5">
@@ -169,7 +152,7 @@ export default function AccionistaDetalle() {
           <button className="btn-secondary btn-sm" onClick={openEdit}>
             Editar
           </button>
-          {temporada && (
+          {temporada && destinatarioAviso && (
             <button className="btn-secondary btn-sm" onClick={handlePrintAviso}>
               Imprimir aviso
             </button>
@@ -436,9 +419,14 @@ function DeudaBreakdownCard({ deuda }: { deuda: DeudaPorTemporada }) {
             <div className="text-xs font-semibold text-gray-600 mb-1.5">Temporadas anteriores al sistema</div>
             <div className="space-y-0.5">
               {inicialPendiente.map(l => (
-                <div key={l.id} className="flex justify-between text-xs text-gray-500">
-                  <span>{l.concepto}{l.abonado > 0 && ` · abonado ${formatCLP(l.abonado)}`}</span>
-                  <span className="tabular-nums">{formatCLP(l.pendiente)}</span>
+                <div key={l.id} className="flex justify-between items-center gap-2 text-xs text-gray-500">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <TipoDeudaTag tipo={l.tipo} />
+                    <span className="truncate">
+                      {l.concepto}{l.abonado > 0 && ` · abonado ${formatCLP(l.abonado)}`}
+                    </span>
+                  </span>
+                  <span className="tabular-nums whitespace-nowrap">{formatCLP(l.pendiente)}</span>
                 </div>
               ))}
             </div>

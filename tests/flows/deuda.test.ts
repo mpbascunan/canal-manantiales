@@ -236,6 +236,36 @@ describe('deuda por temporada', () => {
       assert.equal(multa.pendiente, 100_000)
     })
 
+    it('pays OTRO lines after the cuota and before the multa', () => {
+      // The same order a temporada charges in: cuota, then cargos, then multa.
+      const mixta: DeudaInicialLinea[] = [
+        { id: 1, concepto: 'Multa 2024-2025', tipo: 'MULTA', monto: 100_000 },
+        { id: 2, concepto: 'Aporte obras 2024', tipo: 'OTRO', monto: 200_000 },
+        { id: 3, concepto: 'Cuota impaga 2024-2025', tipo: 'CUOTA', monto: 300_000 }
+      ]
+      const d = calcularDeudaPorTemporada([], [], UNIDADES, HOY, mixta)
+      assert.deepEqual(d.deuda_inicial.map(l => l.tipo), ['CUOTA', 'OTRO', 'MULTA'])
+
+      // An abono covering the cuota and half the otro leaves the multa untouched.
+      const abonos: AbonoAplicable[] = [{ fecha: '2025-04-01', total: 400_000 }]
+      const pagada = calcularDeudaPorTemporada([], abonos, UNIDADES, HOY, mixta)
+      const [cuota, otro, multa] = pagada.deuda_inicial
+
+      assert.equal(cuota.pendiente, 0)
+      assert.equal(otro.pendiente, 100_000)
+      assert.equal(multa.pendiente, 100_000)
+    })
+
+    it('counts an OTRO line towards the debt like any other', () => {
+      const soloOtro: DeudaInicialLinea[] = [
+        { id: 1, concepto: 'Aporte obras 2024', tipo: 'OTRO', monto: 95_000 }
+      ]
+      const d = calcularDeudaPorTemporada([], [], UNIDADES, HOY, soloOtro)
+
+      assert.equal(d.total_deuda_inicial, 95_000)
+      assert.equal(d.total_pendiente, 95_000)
+    })
+
     it('does not let a carried-in multa reduce a temporada multa', () => {
       // The carried figure is a fact, and the D6 fine is computed from the
       // cuota alone — neither should touch the other.

@@ -7,7 +7,7 @@ let db: Database.Database
 
 // Must match the highest version handled in runMigrations(). A database created
 // from SCHEMA below is already at this version and must skip all migrations.
-const LATEST_VERSION = 14
+const LATEST_VERSION = 15
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS temporadas (
@@ -114,7 +114,10 @@ CREATE TABLE IF NOT EXISTS deuda_inicial (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   accionista_id INTEGER NOT NULL REFERENCES accionistas(id) ON DELETE CASCADE,
   concepto      TEXT    NOT NULL,
-  tipo          TEXT    NOT NULL CHECK(tipo IN ('CUOTA','MULTA')),
+  -- OTRO is anything that is neither the season's fee nor a fine: a share of
+  -- works, an agreed settlement. It is charged after CUOTA and before MULTA,
+  -- the same position a cargo holds inside a temporada.
+  tipo          TEXT    NOT NULL CHECK(tipo IN ('CUOTA','MULTA','OTRO')),
   monto         REAL    NOT NULL DEFAULT 0,
   notas         TEXT,
   created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -438,6 +441,35 @@ function runMigrations(database: Database.Database, dbPath: string): void {
       }
     })()
     database.pragma('user_version = 14')
+  }
+
+  if (version < 15) {
+    // v15: deuda_inicial gains the OTRO tipo. The constraint is part of the
+    // table definition and SQLite cannot alter one in place, so the table is
+    // rebuilt and its rows carried across unchanged.
+    database.transaction(() => {
+      database.prepare(`
+        CREATE TABLE deuda_inicial_v15 (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          accionista_id INTEGER NOT NULL REFERENCES accionistas(id) ON DELETE CASCADE,
+          concepto      TEXT    NOT NULL,
+          tipo          TEXT    NOT NULL CHECK(tipo IN ('CUOTA','MULTA','OTRO')),
+          monto         REAL    NOT NULL DEFAULT 0,
+          notas         TEXT,
+          created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `).run()
+      database.prepare(`
+        INSERT INTO deuda_inicial_v15 (id, accionista_id, concepto, tipo, monto, notas, created_at)
+        SELECT id, accionista_id, concepto, tipo, monto, notas, created_at FROM deuda_inicial
+      `).run()
+      database.prepare('DROP TABLE deuda_inicial').run()
+      database.prepare('ALTER TABLE deuda_inicial_v15 RENAME TO deuda_inicial').run()
+      database.prepare(
+        'CREATE INDEX IF NOT EXISTS idx_deuda_inicial_accionista ON deuda_inicial(accionista_id)'
+      ).run()
+    })()
+    database.pragma('user_version = 15')
   }
 }
 

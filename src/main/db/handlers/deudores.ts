@@ -220,8 +220,11 @@ export function registerDeudorHandlers(): void {
    * One call per accionista rather than a single clever query: better-sqlite3 is
    * synchronous and in-process, and one shared code path that is right beats two
    * that can disagree (context.md G6).
+   *
+   * `incluirSinDeuda` keeps the settled shareholders in the result — the avisos
+   * de cobro for "todos los accionistas" need a sheet for every one of them.
    */
-  ipcMain.handle('deudores:list-deuda', (_e, hoy?: string) => {
+  ipcMain.handle('deudores:list-deuda', (_e, hoy?: string, incluirSinDeuda = false) => {
     const db = getDb()
     const fecha = hoy ?? today()
 
@@ -241,7 +244,7 @@ export function registerDeudorHandlers(): void {
 
     return accionistas
       .map(a => ({ ...a, deuda: computeDeuda(a.id as number, fecha) }))
-      .filter(row => row.deuda.total_pendiente > 0)
+      .filter(row => incluirSinDeuda || row.deuda.total_pendiente > 0)
   })
 
   ipcMain.handle('deudores:upsert-config', (_e, cfg: DeudorConfig) => {

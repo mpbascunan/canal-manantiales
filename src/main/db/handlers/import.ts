@@ -1,7 +1,7 @@
 import { ipcMain, dialog } from 'electron'
 import { readFileSync } from 'fs'
 import { getDb } from '../connection'
-import type { ImportResult } from '../../../shared/types'
+import type { ImportResult, TipoDeudaInicial } from '../../../shared/types'
 
 /** One property line of the listado, as it will be written. */
 export interface PropiedadPreviewRow {
@@ -106,11 +106,25 @@ export interface DeudaInicialPreviewRow {
   numero_socio: string | null
   accionista_nombre: string
   concepto: string
-  tipo: 'CUOTA' | 'MULTA'
+  tipo: TipoDeudaInicial
   monto: number
   fila: number
   /** How the row was matched, so the preview can show why it is where it is. */
   matched_by?: 'numero_socio' | 'nombre'
+}
+
+/** Anything unrecognised is a MULTA, which is what the parser defaulted to. */
+function normalizarTipo(v: unknown): TipoDeudaInicial {
+  const t = String(v ?? '').toUpperCase()
+  return t === 'CUOTA' || t === 'OTRO' ? t : 'MULTA'
+}
+
+/** One unmatched name from the deuda sheet, with candidates to choose from. */
+export interface DeudaSinCoincidencia {
+  nombre: string
+  lineas: DeudaInicialPreviewRow[]
+  total: number
+  sugerencias: Sugerencia[]
 }
 
 export interface DeudaInicialPreview {
@@ -120,6 +134,8 @@ export interface DeudaInicialPreview {
   reemplaza: DeudaInicialPreviewRow[]
   /** No accionista matched; these are skipped on import. */
   missing_accionistas: DeudaInicialPreviewRow[]
+  /** The same rows grouped by name, so one choice settles every line of a person. */
+  sin_coincidencia: DeudaSinCoincidencia[]
 }
 
 /**
@@ -225,17 +241,6 @@ export function buildDirectorio(db: ReturnType<typeof getDb>) {
   }
 
   return { buscar, sugerir, porNombre }
-}
-
-/**
- * Finds the accionista a spreadsheet row refers to.
- *
- * `numero_socio` is tried first: the association assigns it, so it identifies a
- * person outright, where names are typed inconsistently and repeat across
- * families. Falls back to the full name, matched the way the pagos import does.
- */
-function buildAccionistaMatcher(db: ReturnType<typeof getDb>) {
-  return buildDirectorio(db).buscar
 }
 
 /**
@@ -576,7 +581,7 @@ export function registerImportHandlers(): void {
 function registerDeudaInicialImport(): void {
   ipcMain.handle('import:preview-deuda-inicial', (_e, rows: any[]): DeudaInicialPreview => {
     const db = getDb()
-    const match = buildAccionistaMatcher(db)
+    const { buscar, sugerir } = buildDirectorio(db)
     const hasLineas = db.prepare('SELECT 1 FROM deuda_inicial WHERE accionista_id = ? LIMIT 1')
 
     const new_lineas: DeudaInicialPreviewRow[] = []
@@ -588,12 +593,12 @@ function registerDeudaInicialImport(): void {
         numero_socio: row.numero_socio ?? null,
         accionista_nombre: String(row.accionista_nombre ?? '').trim(),
         concepto: String(row.concepto ?? '').trim(),
-        tipo: row.tipo === 'CUOTA' ? 'CUOTA' : 'MULTA',
+        tipo: normalizarTipo(row.tipo),
         monto: Math.round(Number(row.monto ?? 0)),
         fila: Number(row.fila ?? 0)
       }
 
-      const hit = match(entry.numero_socio, entry.accionista_nombre)
+      const hit = buscar(entry.numero_socio, entry.accionista_nombre)
       if (!hit) {
         missing_accionistas.push(entry)
         continue
@@ -603,12 +608,34 @@ function registerDeudaInicialImport(): void {
       else new_lineas.push(entry)
     }
 
-    return { new_lineas, reemplaza, missing_accionistas }
+    // One decision per person: a misspelt name carries every line they owe.
+    const porNombre = new Map<string, DeudaInicialPreviewRow[]>()
+    for (const l of missing_accionistas) {
+      const lista = porNombre.get(l.accionista_nombre) ?? []
+      lista.push(l)
+      porNombre.set(l.accionista_nombre, lista)
+    }
+    const sin_coincidencia: DeudaSinCoincidencia[] = [...porNombre]
+      .map(([nombre, lineas]) => ({
+        nombre,
+        lineas,
+        total: lineas.reduce((s, l) => s + l.monto, 0),
+        sugerencias: sugerir(nombre)
+      }))
+      .sort((a, b) => b.total - a.total)
+
+    return { new_lineas, reemplaza, missing_accionistas, sin_coincidencia }
   })
 
-  ipcMain.handle('import:deuda-inicial', (_e, rows: any[]): ImportResult => {
+  /** `asignaciones` carries the names the user resolved by hand in the preview. */
+  ipcMain.handle('import:deuda-inicial', (
+    _e, rows: any[], asignaciones: Record<string, number> = {}
+  ): ImportResult => {
     const db = getDb()
-    const match = buildAccionistaMatcher(db)
+    const { buscar } = buildDirectorio(db)
+    const manual = new Map<string, number>(
+      Object.entries(asignaciones ?? {}).map(([nombre, id]) => [claveNombre(nombre), Number(id)])
+    )
     let imported = 0
     let skipped = 0
     const errors: string[] = []
@@ -620,15 +647,16 @@ function registerDeudaInicialImport(): void {
 
       for (const row of rows) {
         const nombre = String(row.accionista_nombre ?? '').trim()
-        const hit = match(row.numero_socio ?? null, nombre)
-        if (!hit) {
+        const accionistaId =
+          buscar(row.numero_socio ?? null, nombre)?.id ?? manual.get(claveNombre(nombre))
+        if (accionistaId === undefined) {
           skipped++
           errors.push(`Fila ${row.fila}: no se encontró el accionista "${nombre}"`)
           continue
         }
-        const lista = porAccionista.get(hit.id) ?? []
+        const lista = porAccionista.get(accionistaId) ?? []
         lista.push(row)
-        porAccionista.set(hit.id, lista)
+        porAccionista.set(accionistaId, lista)
       }
 
       const wipe = db.prepare('DELETE FROM deuda_inicial WHERE accionista_id = ?')
@@ -643,7 +671,7 @@ function registerDeudaInicialImport(): void {
           insert.run({
             accionista_id: accionistaId,
             concepto: String(linea.concepto ?? '').trim() || 'Deuda temporadas anteriores',
-            tipo: linea.tipo === 'CUOTA' ? 'CUOTA' : 'MULTA',
+            tipo: normalizarTipo(linea.tipo),
             monto: Math.round(Number(linea.monto ?? 0)),
             notas: `Importado desde Excel, fila ${linea.fila}`
           })

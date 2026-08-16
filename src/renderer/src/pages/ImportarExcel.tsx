@@ -4,8 +4,12 @@ import { parsePropiedades, parseDeudaInicial, parsePagos } from '../lib/importPa
 import {
   descargarPlantillaAccionistas, descargarPlantillaDeudaInicial, descargarPlantillaPagos
 } from '../lib/plantillas'
-import { armarNoImportados, descargarNoImportados } from '../lib/importReport'
-import type { Temporada } from '../../../shared/types'
+import {
+  armarDeudaNoImportada, armarNoImportados,
+  descargarDeudaNoImportada, descargarNoImportados
+} from '../lib/importReport'
+import type { Temporada, TipoDeudaInicial } from '../../../shared/types'
+import { DEUDA_TIPO_LABELS } from '../lib/labels'
 import { formatCLP, formatNumber } from '../lib/formulas'
 
 type Step = 'accionistas' | 'pagos' | 'deuda-inicial'
@@ -67,10 +71,16 @@ interface DeudaInicialPreviewRow {
   numero_socio: string | null
   accionista_nombre: string
   concepto: string
-  tipo: 'CUOTA' | 'MULTA'
+  tipo: TipoDeudaInicial
   monto: number
   fila: number
   matched_by?: 'numero_socio' | 'nombre'
+}
+interface DeudaSinCoincidencia {
+  nombre: string
+  lineas: DeudaInicialPreviewRow[]
+  total: number
+  sugerencias: Sugerencia[]
 }
 interface StepResult {
   imported: number
@@ -113,6 +123,7 @@ export default function ImportarExcel() {
     new_lineas: DeudaInicialPreviewRow[]
     reemplaza: DeudaInicialPreviewRow[]
     missing_accionistas: DeudaInicialPreviewRow[]
+    sin_coincidencia: DeudaSinCoincidencia[]
     rows: any[]
   } | null>(null)
 
@@ -237,6 +248,7 @@ export default function ImportarExcel() {
         return
       }
       const preview = await api.deudaInicial.previewImport(rows)
+      setAsignaciones({})
       setDeudaPreview({ ...preview, rows })
       setPhase('preview')
     } catch (e: any) {
@@ -249,7 +261,7 @@ export default function ImportarExcel() {
     if (!deudaPreview) return
     setPhase('importing')
     try {
-      const res = await api.deudaInicial.import(deudaPreview.rows)
+      const res = await api.deudaInicial.import(deudaPreview.rows, asignaciones)
       setResult(res)
       setPhase('done')
     } catch (e: any) {
@@ -264,6 +276,16 @@ export default function ImportarExcel() {
     ? armarNoImportados({ ...pagoPreview, asignaciones, errores: result?.errors ?? [] })
     : []
   const noImportadas = noImportadasRows.length
+
+  const deudaNoImportadaRows = deudaPreview
+    ? armarDeudaNoImportada({ ...deudaPreview, asignaciones, errores: result?.errors ?? [] })
+    : []
+  const deudaNoImportada = deudaNoImportadaRows.length
+
+  const descargarReporteDeuda = () => {
+    if (!deudaPreview) return
+    descargarDeudaNoImportada({ ...deudaPreview, asignaciones, errores: result?.errors ?? [] })
+  }
 
   const descargarReporte = () => {
     if (!pagoPreview) return
@@ -444,19 +466,7 @@ export default function ImportarExcel() {
             <>
               <ImportResult result={result} />
               {noImportadas > 0 && (
-                <div className="card p-4 mt-2 border-amber-200 bg-amber-50 space-y-2">
-                  <p className="text-sm font-medium text-amber-800">
-                    {noImportadas} {noImportadas === 1 ? 'fila quedó' : 'filas quedaron'} fuera
-                  </p>
-                  <p className="text-xs text-gray-600">
-                    Descarga la lista con el motivo de cada una y qué hacer al respecto. Sirve
-                    como pauta para registrarlas a mano o para corregir la planilla y volver
-                    a importarla.
-                  </p>
-                  <button className="btn-secondary" onClick={descargarReporte}>
-                    ↓ Descargar Excel de filas no importadas
-                  </button>
-                </div>
+                <ReporteNoImportadas cantidad={noImportadas} onDescargar={descargarReporte} />
               )}
               <button className="btn-secondary mt-2" onClick={() => { setPhase('idle'); setResult(null) }}>
                 Importar otro archivo
@@ -508,6 +518,13 @@ export default function ImportarExcel() {
           {phase === 'preview' && deudaPreview && (
             <DeudaInicialPreviewPanel
               preview={deudaPreview}
+              asignaciones={asignaciones}
+              onAsignar={(nombre, id) => setAsignaciones(a => {
+                const next = { ...a }
+                if (id === null) delete next[nombre]
+                else next[nombre] = id
+                return next
+              })}
               onConfirm={handleConfirmDeudaInicial}
               onCancel={handleCancel}
             />
@@ -523,6 +540,12 @@ export default function ImportarExcel() {
           {phase === 'done' && result && (
             <>
               <ImportResult result={result} />
+              {deudaNoImportada > 0 && (
+                <ReporteNoImportadas
+                  cantidad={deudaNoImportada}
+                  onDescargar={descargarReporteDeuda}
+                />
+              )}
               <button className="btn-secondary mt-2" onClick={() => { setPhase('idle'); setResult(null) }}>
                 Importar otro archivo
               </button>
@@ -530,6 +553,31 @@ export default function ImportarExcel() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * The worklist offer, once an import is done. Shown for both files because the
+ * question after either one is the same: what did not get in, and what do I do
+ * about it now that the preview is gone.
+ */
+function ReporteNoImportadas({ cantidad, onDescargar }: {
+  cantidad: number
+  onDescargar: () => void
+}) {
+  return (
+    <div className="card p-4 mt-2 border-amber-200 bg-amber-50 space-y-2">
+      <p className="text-sm font-medium text-amber-800">
+        {cantidad} {cantidad === 1 ? 'fila quedó' : 'filas quedaron'} fuera
+      </p>
+      <p className="text-xs text-gray-600">
+        Descarga la lista con el motivo de cada una y qué hacer al respecto. Sirve como pauta
+        para registrarlas a mano o para corregir la planilla y volver a importarla.
+      </p>
+      <button className="btn-secondary" onClick={onDescargar}>
+        ↓ Descargar Excel de filas no importadas
+      </button>
     </div>
   )
 }
@@ -750,9 +798,15 @@ function PagosPreviewPanel({ preview, asignaciones, onAsignar, onConfirm, onCanc
 
       {preview.sin_coincidencia.length > 0 && (
         <EmparejarNombres
-          grupos={preview.sin_coincidencia}
+          grupos={preview.sin_coincidencia.map(g => ({
+            nombre: g.nombre,
+            total: g.total,
+            detalle: `${g.pagos.length} ${g.pagos.length === 1 ? 'pago' : 'pagos'} · N° ${g.pagos.map(p => p.numero_ingreso).join(', ')}`,
+            sugerencias: g.sugerencias
+          }))}
           asignaciones={asignaciones}
           onAsignar={onAsignar}
+          queNoSeImporta="esos pagos quedan fuera"
         />
       )}
 
@@ -819,6 +873,15 @@ function PagosPreviewPanel({ preview, asignaciones, onAsignar, onConfirm, onCanc
   )
 }
 
+/** What EmparejarNombres needs, whichever import is asking. */
+interface GrupoEmparejable {
+  nombre: string
+  total: number
+  /** "3 pagos · N° 500, 501" — whatever identifies the rows behind this name. */
+  detalle: string
+  sugerencias: Sugerencia[]
+}
+
 /**
  * Resolves the names the two spreadsheets spell differently.
  *
@@ -831,10 +894,12 @@ function PagosPreviewPanel({ preview, asignaciones, onAsignar, onConfirm, onCanc
  * Grouped by name because the decision is about a person: settling one name
  * admits every payment they made.
  */
-function EmparejarNombres({ grupos, asignaciones, onAsignar }: {
-  grupos: NombreSinCoincidencia[]
+function EmparejarNombres({ grupos, asignaciones, onAsignar, queNoSeImporta }: {
+  grupos: GrupoEmparejable[]
   asignaciones: Record<string, number>
   onAsignar: (nombre: string, accionistaId: number | null) => void
+  /** What is lost by leaving a name unresolved, in this import's own words. */
+  queNoSeImporta: string
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const pendientes = grupos.filter(g => asignaciones[g.nombre] === undefined)
@@ -862,10 +927,10 @@ function EmparejarNombres({ grupos, asignaciones, onAsignar }: {
       {!collapsed && (
         <div className="border-t border-gray-100">
           <p className="text-xs text-gray-600 px-4 py-2 bg-gray-50">
-            Elige a qué accionista corresponde cada nombre del archivo. Los pagos que dejes
-            <strong> sin emparejar no se importarán</strong>. Se comparan sin distinguir mayúsculas
-            ni acentos, así que lo que queda aquí son diferencias reales de escritura
-            («Figueroa C.» frente a «FIGUEROA CUBILLOS»).
+            Elige a qué accionista corresponde cada nombre del archivo. Lo que dejes
+            <strong> sin emparejar no se importará</strong> ({queNoSeImporta}). Se comparan sin
+            distinguir mayúsculas ni acentos, así que lo que queda aquí son diferencias reales
+            de escritura («Figueroa C.» frente a «FIGUEROA CUBILLOS»).
           </p>
 
           <div className="max-h-[28rem] overflow-y-auto divide-y divide-gray-100">
@@ -876,10 +941,7 @@ function EmparejarNombres({ grupos, asignaciones, onAsignar }: {
                   <div className="flex items-baseline justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">{g.nombre}</div>
-                      <div className="text-xs text-gray-500">
-                        {g.pagos.length} {g.pagos.length === 1 ? 'pago' : 'pagos'}
-                        {' · '}N° {g.pagos.map(p => p.numero_ingreso).join(', ')}
-                      </div>
+                      <div className="text-xs text-gray-500">{g.detalle}</div>
                     </div>
                     <div className="text-sm tabular-nums whitespace-nowrap">{formatCLP(g.total)}</div>
                   </div>
@@ -890,7 +952,7 @@ function EmparejarNombres({ grupos, asignaciones, onAsignar }: {
                       value={elegido ?? ''}
                       onChange={e => onAsignar(g.nombre, e.target.value === '' ? null : Number(e.target.value))}
                     >
-                      <option value="">— No importar estos pagos —</option>
+                      <option value="">— No importar —</option>
                       {g.sugerencias.map(sug => (
                         <option key={sug.accionista_id} value={sug.accionista_id}>
                           {sug.nombre}
@@ -1095,19 +1157,27 @@ function ImportResult({ result }: { result: StepResult }) {
  * are guessed from header text, so seeing the amounts next to the names is the
  * only way to catch a sheet that was read the wrong way round.
  */
-function DeudaInicialPreviewPanel({ preview, onConfirm, onCancel }: {
+function DeudaInicialPreviewPanel({ preview, asignaciones, onAsignar, onConfirm, onCancel }: {
   preview: {
     new_lineas: DeudaInicialPreviewRow[]
     reemplaza: DeudaInicialPreviewRow[]
     missing_accionistas: DeudaInicialPreviewRow[]
+    sin_coincidencia: DeudaSinCoincidencia[]
   }
+  asignaciones: Record<string, number>
+  onAsignar: (nombre: string, accionistaId: number | null) => void
   onConfirm: () => void
   onCancel: () => void
 }) {
-  const importables = [...preview.new_lineas, ...preview.reemplaza]
+  // Names settled by hand import too, so they count towards the totals shown.
+  const resueltos = preview.sin_coincidencia.filter(g => asignaciones[g.nombre] !== undefined)
+  const pendientes = preview.sin_coincidencia.length - resueltos.length
+  const lineasResueltas = resueltos.flatMap(g => g.lineas)
+
+  const importables = [...preview.new_lineas, ...preview.reemplaza, ...lineasResueltas]
   const total = importables.reduce((acc, l) => acc + l.monto, 0)
   const afectados = new Set(importables.map(l => l.numero_socio ?? l.accionista_nombre)).size
-  const hasMissing = preview.missing_accionistas.length > 0
+  const hasMissing = pendientes > 0
 
   return (
     <div className="space-y-4">
@@ -1124,8 +1194,13 @@ function DeudaInicialPreviewPanel({ preview, onConfirm, onCancel }: {
             </span>
           )}
           {hasMissing && (
-            <span className="text-amber-700 font-medium">
-              ⚠ {preview.missing_accionistas.length} sin accionista (se omitirán)
+            <span className="text-red-700 font-medium">
+              ✗ {pendientes} nombres sin emparejar
+            </span>
+          )}
+          {resueltos.length > 0 && (
+            <span className="text-canal-700 font-medium">
+              ↔ {resueltos.length} emparejados por ti
             </span>
           )}
         </div>
@@ -1146,11 +1221,19 @@ function DeudaInicialPreviewPanel({ preview, onConfirm, onCancel }: {
       {preview.reemplaza.length > 0 && (
         <DeudaInicialTable title={`Reemplazan deuda existente (${preview.reemplaza.length})`} color="blue" rows={preview.reemplaza} />
       )}
-      {hasMissing && (
-        <DeudaInicialTable
-          title={`No se encontró el accionista — se omitirán (${preview.missing_accionistas.length})`}
-          color="amber"
-          rows={preview.missing_accionistas}
+      {preview.sin_coincidencia.length > 0 && (
+        <EmparejarNombres
+          grupos={preview.sin_coincidencia.map(g => ({
+            nombre: g.nombre,
+            total: g.total,
+            detalle: `${g.lineas.length} ${g.lineas.length === 1 ? 'línea' : 'líneas'} · ${
+              [...new Set(g.lineas.map(l => DEUDA_TIPO_LABELS[l.tipo]))].join(' + ')
+            } · fila ${g.lineas.map(l => l.fila).join(', ')}`,
+            sugerencias: g.sugerencias
+          }))}
+          asignaciones={asignaciones}
+          onAsignar={onAsignar}
+          queNoSeImporta="esa deuda no queda registrada"
         />
       )}
 
@@ -1206,7 +1289,7 @@ function DeudaInicialTable({ title, color, rows }: {
                   </td>
                   <td className="px-3 py-1.5">{r.accionista_nombre}</td>
                   <td className="px-3 py-1.5 text-gray-600">{r.concepto}</td>
-                  <td className="px-3 py-1.5 text-gray-500">{r.tipo === 'CUOTA' ? 'Cuota' : 'Multa'}</td>
+                  <td className="px-3 py-1.5 text-gray-500">{DEUDA_TIPO_LABELS[r.tipo]}</td>
                   <td className="px-3 py-1.5 text-right tabular-nums">{formatCLP(r.monto)}</td>
                 </tr>
               ))}

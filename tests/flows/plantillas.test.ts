@@ -74,10 +74,12 @@ describe('plantillas de importación', () => {
     const rows = parseDeudaInicial(bytes(buildPlantillaDeudaInicial()))
 
     it('turns each non-zero amount into its own line and skips the zeros', () => {
+      // Charged in the order they are listed: cuota, then otro, then multa.
       assert.deepEqual(rows.map(r => [r.numero_socio, r.tipo, r.monto]), [
         ['1', 'CUOTA', 480000],
         ['1', 'MULTA', 240000],
-        ['3', 'MULTA', 120000]
+        ['3', 'MULTA', 120000],
+        ['5', 'OTRO', 95000]
       ])
     })
 

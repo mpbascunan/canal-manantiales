@@ -17,7 +17,7 @@ export function registerDeudaInicialHandlers(): void {
       .prepare(
         `SELECT * FROM deuda_inicial
          WHERE accionista_id = ?
-         ORDER BY CASE tipo WHEN 'CUOTA' THEN 0 ELSE 1 END, id`
+         ORDER BY CASE tipo WHEN 'CUOTA' THEN 0 WHEN 'OTRO' THEN 1 ELSE 2 END, id`
       )
       .all(accionistaId)
   })
@@ -103,7 +103,7 @@ export function registerDeudaInicialHandlers(): void {
         .prepare(
           `SELECT * FROM deuda_inicial
            WHERE accionista_id = ?
-           ORDER BY CASE tipo WHEN 'CUOTA' THEN 0 ELSE 1 END, id`
+           ORDER BY CASE tipo WHEN 'CUOTA' THEN 0 WHEN 'OTRO' THEN 1 ELSE 2 END, id`
         )
         .all(accionistaId)
     }

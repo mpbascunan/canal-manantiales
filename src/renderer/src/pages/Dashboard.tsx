@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/ipc'
 import { formatCLP, formatFecha, mesNombre } from '../lib/formulas'
-import { exportAvisosCobro } from '../lib/export'
+import { exportAvisosCobro, type AvisoDestinatario } from '../lib/export'
 import type { Temporada, Pago, ResumenContable, ResumenMensual, Accionista } from '../../../shared/types'
+import type { DeudaPorTemporada } from '../../../shared/deuda'
 
 // ── SVG Donut Chart ────────────────────────────────────────────────────────
 
@@ -117,21 +118,27 @@ export default function Dashboard() {
   const [printing, setPrinting] = useState<'deudores' | 'todos' | null>(null)
   const navigate = useNavigate()
 
+  /**
+   * Each aviso charges the shareholder's whole outstanding balance — every
+   * temporada still owed plus the pre-app debt, net of abonos (D13, D14) — so
+   * both modes read the same breakdown the Deudores page does. "Todos" keeps the
+   * settled shareholders, who receive a sheet stating they owe nothing.
+   */
   const handlePrintAvisos = async (mode: 'deudores' | 'todos') => {
     if (!temporada) return
     setPrinting(mode)
     try {
-      let accionistas: Accionista[]
-      if (mode === 'deudores') {
-        accionistas = await api.deudores.list(temporada.id)
-      } else {
-        accionistas = await api.accionistas.list()
-      }
-      if (accionistas.length === 0) {
+      const rows: (Accionista & { deuda: DeudaPorTemporada })[] =
+        await api.deudores.listDeuda(undefined, mode === 'todos')
+      if (rows.length === 0) {
         alert(mode === 'deudores' ? 'No hay deudores esta temporada.' : 'No hay accionistas registrados.')
         return
       }
-      exportAvisosCobro(accionistas, temporada, temporada.valor_accion)
+      const destinatarios: AvisoDestinatario[] = rows.map(({ deuda, ...accionista }) => ({
+        accionista: accionista as Accionista,
+        deuda
+      }))
+      exportAvisosCobro(destinatarios, temporada)
     } finally {
       setPrinting(null)
     }

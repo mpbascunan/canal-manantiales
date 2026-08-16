@@ -57,10 +57,15 @@ describe('deuda inicial', () => {
     assert.equal(row.monto, 240_000)
   })
 
-  it('refuses a tipo outside CUOTA and MULTA', async () => {
+  it('accepts OTRO, for debt that is neither a cuota nor a multa', async () => {
+    const linea = await crear({ tipo: 'OTRO', concepto: 'Aporte obras 2024' })
+    assert.equal(linea.tipo, 'OTRO')
+  })
+
+  it('refuses a tipo outside the three it knows', async () => {
     // `async` matters: better-sqlite3 is synchronous, so the CHECK constraint
     // throws before `invokeHandler` ever builds a promise.
-    await assert.rejects(async () => crear({ tipo: 'OTRO' as DeudaInicial['tipo'] }))
+    await assert.rejects(async () => crear({ tipo: 'CARGO' as DeudaInicial['tipo'] }))
   })
 
   it('updates a line', async () => {

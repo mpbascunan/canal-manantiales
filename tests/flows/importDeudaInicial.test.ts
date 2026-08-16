@@ -60,6 +60,62 @@ describe('importación de deuda inicial', () => {
       assert.equal(preview.missing_accionistas[0].fila, 7)
     })
 
+    it('matches a name that only differs by accent or capitals', async () => {
+      // SQLite's LOWER() folds only A-Z, so this never matched before.
+      await seedAccionista('JOSÉ MUÑOZ DÍAZ')
+
+      const preview = await invoke<DeudaInicialPreview>('import:preview-deuda-inicial', [
+        fila({ accionista_nombre: 'Jose Munoz Diaz' })
+      ])
+
+      assert.equal(preview.sin_coincidencia.length, 0)
+      assert.equal(preview.new_lineas.length, 1)
+    })
+
+    it('groups unmatched names and suggests who they might be', async () => {
+      await seedAccionista('MARIA PATRICIA FIGUEROA CUBILLOS')
+
+      const preview = await invoke<DeudaInicialPreview>('import:preview-deuda-inicial', [
+        fila({ accionista_nombre: 'María Patricia Figueroa C.', tipo: 'CUOTA', monto: 480_000, fila: 2 }),
+        fila({ accionista_nombre: 'María Patricia Figueroa C.', tipo: 'MULTA', monto: 240_000, fila: 3 })
+      ])
+
+      // Both lines belong to one decision about one person.
+      assert.equal(preview.sin_coincidencia.length, 1)
+      const grupo = preview.sin_coincidencia[0]
+      assert.equal(grupo.lineas.length, 2)
+      assert.equal(grupo.total, 720_000)
+      assert.equal(grupo.sugerencias[0].nombre, 'MARIA PATRICIA FIGUEROA CUBILLOS')
+    })
+
+    it('imports a name the user matched by hand, and only that one', async () => {
+      const maria = await seedAccionista('MARIA PATRICIA FIGUEROA CUBILLOS')
+
+      const result = await invoke<ImportResult>('import:deuda-inicial', [
+        fila({ accionista_nombre: 'María Patricia Figueroa C.', fila: 2 }),
+        fila({ accionista_nombre: 'Nadie De Nadie', fila: 3 })
+      ], { 'María Patricia Figueroa C.': maria.id })
+
+      assert.equal(result.imported, 1)
+      assert.equal(result.skipped, 1)
+      assert.match(result.errors[0], /Fila 3/)
+
+      const lineas = await invoke<DeudaInicial[]>('deuda-inicial:list-by-accionista', maria.id)
+      assert.equal(lineas.length, 1)
+    })
+
+    it('never lets a manual assignment override a real match', async () => {
+      const juan = await seedJuan()
+      const otro = await seedAccionista('Otra Persona')
+
+      await invoke<ImportResult>('import:deuda-inicial', [
+        fila({ numero_socio: '042' })
+      ], { 'Juan Pérez Soto': otro.id })
+
+      assert.equal((await invoke<DeudaInicial[]>('deuda-inicial:list-by-accionista', juan.id)).length, 1)
+      assert.equal((await invoke<DeudaInicial[]>('deuda-inicial:list-by-accionista', otro.id)).length, 0)
+    })
+
     it('skips unmatched rows on import and says which ones', async () => {
       await seedJuan()
       const result = await invoke<ImportResult>('import:deuda-inicial', [

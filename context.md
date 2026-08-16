@@ -222,8 +222,14 @@ own `valor_accion`, because that is the row the calculation reads.
 ### D14 — Debt predating the app is transcribed, not reconstructed · *decided; stored and imported, not yet shown*
 
 Pre-app debt enters as `deuda_inicial` rows (migration v13): one or more lines per accionista,
-each a `concepto`, a `tipo` of `CUOTA` or `MULTA`, and a `monto` taken from the
+each a `concepto`, a `tipo` of `CUOTA`, `OTRO` or `MULTA`, and a `monto` taken from the
 administration's own records. It is never recalculated — the figure *is* the fact.
+
+`OTRO` (migration v15) is anything that is neither the season's fee nor a fine — a share of
+works, an agreed settlement. Abonos consume the three in the order `CUOTA`, `OTRO`, `MULTA`,
+mirroring the way a temporada charges its cuota, then its cargos, then its multa (D3). The
+tipo is shown next to the concepto everywhere the debt is listed, because the concepto is
+free text and may not say what the amount is for.
 
 This replaces backfilling historical temporadas as the way old debt enters, and it is the
 better answer: the administration's paper figures are authoritative, where a reconstruction
@@ -246,6 +252,35 @@ Consequence: `deuda_inicial` MULTA lines are excluded from `total_multas`, which
 multas por atraso computed by D6. Whether the resumen contable reports them as multa income when
 collected is still open.
 
+### D15 — The aviso de cobranza demands the whole outstanding balance · *decided, implemented*
+
+The aviso is the sheet a shareholder is handed and pays against at the counter, so it charges
+everything they owe on the day it is printed: the pre-app debt first (D14), then every
+temporada with anything still pending, oldest first — each net of the abonos already allocated
+to it (D3) and priced at its own season's rates (D13). It is **not** a bill for the active
+season's cuota; a shareholder two seasons behind receives one sheet listing all of it.
+
+Consequence: the aviso reads `deudores:get-deuda`, the same breakdown the debt card and the
+deudores listing render, and computes no figure of its own. A printed sheet and the screen
+cannot disagree — that is what closes G8.
+
+Consequence: what is shown and what is charged are distinguished explicitly.
+`construirLineasAviso` in `lib/export.ts` returns typed lines with a `cobrable` flag; season
+headings, the per-property split of a cuota and already-settled cargos are shown but not
+charged, and the charged lines sum to `total_pendiente` exactly. `tests/flows/avisos.test.ts`
+holds that as an invariant across every scenario, and reads the text back out of the generated
+PDF.
+
+Consequence: the per-property split of a cuota is printed only while nothing has been abonado
+against that season — splitting a partial remainder across parcelas would invent an allocation
+nobody decided. The whole-season line, with what has been abonado noted beside it, is the
+honest form once money has landed.
+
+Consequence: an accionista who owes nothing still gets a sheet when the administration prints
+for everyone, stating exactly that; money abonado beyond every debt is printed as excedente a
+favor rather than silently dropped. `deudores:list-deuda` therefore takes `incluirSinDeuda`,
+since the deudores listing wants those rows gone and the bulk print wants them kept.
+
 ---
 
 ## 4. Known gaps — code does not implement a decided rule
@@ -255,8 +290,7 @@ collected is still open.
 | **G2** | The payment form accepts any amount and still marks the temporada settled. | D2 |
 | **G3** | `accionistas:update` deletes and re-inserts all propiedades, destroying their ids on every save. | D7 |
 | **G4** | Debt is the scalar `temporadas_adeudadas`, priced entirely at the *active* season's `valor_accion` and `monto_multa_por_accion`. There is no per-season derivation, and no default — it is 1 until a human changes it. | D13, D4 |
-| **G7** | `calcularDeuda`, `calcularMultas` and `calcularMultaVencimiento` still exist in `src/renderer/src/lib/formulas.ts` and still implement the old flat + double-charged multa. Nothing on screen calls them any more except the aviso (G8), but they are there to be picked up by mistake. | D6 |
-| **G8** | The aviso de cobranza and the deudores Excel export (`lib/export.ts`) still take a single `multaVencimiento` figure computed the old way, so a printed aviso can disagree with the screen. | D6 |
+| **G7** | `calcularDeuda`, `calcularMultas`, `calcularMultaVencimiento` and `tieneMultaVencimiento` still exist in `src/renderer/src/lib/formulas.ts` and still implement the old flat + double-charged multa. Only `calcularMultas` is still called, by the Accionistas listing; the rest are dead code waiting to be picked up by mistake. | D6 |
 | **G5** | Money is stored unrounded as `REAL`; rounding happens only at display. | D8 |
 | **G6** | The cargo amount formula (`fija` vs `proporcional`) is written twice — once in TypeScript, once in SQL inside `deudores.ts` and `cargos.ts`. Changing one silently diverges from the other. | — |
 
@@ -270,6 +304,9 @@ now only resolves `fija` vs `proporcional` into a figure; the rules live in `src
 A related bug went with it: `abonos:create` used to flip every pending cargo to `pagado` once
 the total abonado reached their sum, so the same money paid the cargos *and* counted in full
 against the cuota. Coverage is derived now; `pagado` means settled by a pago or by hand.
+*G8* — the aviso de cobranza now renders `deudores:get-deuda` directly (D15) and takes no
+`multaVencimiento` figure of its own. The deudores Excel export was already reduced from the
+same breakdown by the Deudores page.
 
 ---
 
@@ -291,10 +328,14 @@ swaps `electron` for an in-process stub, and runs the real IPC handlers against 
 file on the Electron binary. It covers the handlers and, in `tests/flows/deuda.test.ts`, the
 D3/D6 money rules as worked scenarios.
 
-What it does **not** cover: the renderer. `calcularDeuda` in
-`src/renderer/src/lib/formulas.ts`, the debt cards, the pago form and the PDF/Excel exports are
-still checked only by a person comparing the screen against paper. Since the multa engine in
-`src/shared/deuda.ts` is not yet wired into any of those (see G7), the numbers a user actually
-sees remain unverified.
+The aviso de cobranza is covered end to end in `tests/flows/avisos.test.ts`: real rows →
+`deudores:get-deuda` → the lines the sheet charges → the PDF, whose text is read back out of
+the generated document (`tests/helpers/pdf.ts`) rather than trusted. That is the only export
+verified this way, and it is the one that leaves the building on paper.
+
+What it does **not** cover: the rest of the renderer. `calcularDeuda` in
+`src/renderer/src/lib/formulas.ts`, the debt cards, the pago form and the remaining PDF/Excel
+exports are still checked only by a person comparing the screen against paper. There is still
+no UI or e2e test (README item 29).
 
 Treat that as the main risk when changing anything in §3 or §4.

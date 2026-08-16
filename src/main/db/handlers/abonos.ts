@@ -25,26 +25,17 @@ export function registerAbonoHandlers(): void {
         notas:          input.notas ?? null
       })
 
-      // Auto-mark cargos as paid if total abonado now covers all pending cargos
-      const { total_abonado } = db.prepare(
-        `SELECT COALESCE(SUM(total), 0) AS total_abonado
-         FROM abonos WHERE accionista_id = ? AND temporada_id = ?`
-      ).get(input.accionista_id, input.temporada_id) as { total_abonado: number }
-
-      const { total_cargos_pendientes } = db.prepare(
-        `SELECT COALESCE(SUM(ca.monto), 0) AS total_cargos_pendientes
-         FROM cargo_accionistas ca
-         JOIN cargos c ON c.id = ca.cargo_id
-         WHERE ca.accionista_id = ? AND c.temporada_id = ? AND ca.pagado = 0`
-      ).get(input.accionista_id, input.temporada_id) as { total_cargos_pendientes: number }
-
-      if (total_cargos_pendientes > 0 && total_abonado >= total_cargos_pendientes) {
-        db.prepare(
-          `UPDATE cargo_accionistas SET pagado = 1
-           WHERE accionista_id = ? AND pagado = 0
-             AND cargo_id IN (SELECT id FROM cargos WHERE temporada_id = ?)`
-        ).run(input.accionista_id, input.temporada_id)
-      }
+      // Deliberately does NOT mark cargos as paid.
+      //
+      // It used to: if the accionista's total abonado for the temporada reached
+      // the sum of their pending cargos, every one of them was flipped to
+      // `pagado`. That spent the same money twice — the abono settled the cargos
+      // *and* still counted in full against the cuota.
+      //
+      // How much of a cargo an abono has covered is now derived, by
+      // `calcularDeudaPorTemporada` allocating each abono across the cuota, then
+      // the cargos, then the multa (D3). `cargo_accionistas.pagado` keeps its
+      // narrower meaning: settled outside the abono flow, by a pago or by hand.
     })()
 
     return { success: true }

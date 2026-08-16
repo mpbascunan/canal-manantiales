@@ -32,7 +32,8 @@ run by the administration on one machine.
 | **pago** | Full settlement of a temporada. Carries `numero_ingreso`, the number of a physical paper receipt entered by hand at the counter. |
 | **abono** | A partial payment against a temporada's debt. |
 | **cargo** | A charge issued to specific accionistas beyond the cuota — cuota extraordinaria, limpia de acequia, multa por inasistencia. `tipo_tarifa` is `fija` (flat) or `proporcional` (`tarifa × unidades`). |
-| **multa** | An automatically computed fine. Two kinds exist — see §3 D6, which is **open**. |
+| **multa por atraso** | The fine for paying a temporada late. Computed automatically from the temporada's `fecha_multa` and `monto_multa_por_accion` — never issued by hand. See D6. |
+| **multa (por inasistencia)** | A fine for missing a reunión or a votación. Despite the name it is a **cargo**, issued by hand to named accionistas, and follows cargo rules — not D6. |
 | **deudor** | An accionista with no `pago` for the temporada, **or** with any unpaid `cargo`. |
 | **respaldo** | A user-initiated backup of the database file. |
 
@@ -71,11 +72,20 @@ be entered as an abono.
 Consequence: the payment form must refuse or warn when the entered amount does not match the
 computed total, or a typo silently marks someone paid. **Not implemented** — see G2.
 
-### D3 — Abonos consume the oldest unpaid temporada first, and within a temporada pay the deuda before the multas · *decided, not implemented*
+### D3 — Abonos consume the oldest unpaid temporada first, and within a temporada pay the deuda before the multas · *decided, engine built, not wired*
 
-Consequence: `calcularDeuda` currently subtracts `SUM(abonos.total)` from the season subtotal
-as a single lump with no ordering — see G1. Allocation must become explicit before anything
-else is built on abono behavior.
+A temporada is settled **completely** — cuota, then its multa — before any money reaches the
+next one. Note this is per-temporada interleaving, not "every cuota, then every multa": with
+two seasons owed and an abono that covers the first cuota with change to spare, the change pays
+the *first* season's multa rather than the second season's cuota. The totals are identical
+either way; only the per-row breakdown on the aviso differs.
+
+Implemented as `calcularDeudaPorTemporada` in `src/shared/deuda.ts`, with scenarios in
+`tests/flows/deuda.test.ts`. It lives in `src/shared/` rather than in the renderer so the
+main process can use the same function instead of a second copy in SQL (cf. G6).
+
+Consequence: `calcularDeuda` in the renderer still subtracts `SUM(abonos.total)` from the
+season subtotal as a single lump with no ordering, and is still what the UI renders — see G1.
 
 ### D4 — `temporadas_adeudadas` is a manual override, on purpose · *decided*
 
@@ -96,20 +106,51 @@ Consequence: **never add another money column** to `pagos` or `abonos`. A new ki
 is a cargo. Multas stay first-class in the formulas because they are computed automatically
 from the temporada's rules rather than issued by hand to named people.
 
-### D6 — Which multa model governs the late fine · **OPEN — do not implement around this**
+### D6 — The multa por atraso is proportional, frozen at the deadline, and summed per temporada · *decided, not implemented*
 
-Two formulas exist and disagree:
+The fine is proportional to the share of a temporada's cuota still unpaid — not a flat charge.
+It is computed **once per unpaid temporada**, using that temporada's own
+`monto_multa_por_accion`, and the per-temporada results are summed:
 
-- `calcularMultas` — `monto_multa_por_accion × unidades × (temporadas_adeudadas − 1)`, flat.
-- `calcularMultaVencimiento` — same, scaled by the fraction still unpaid, so an accionista who
-  has abonado half owes half the fine.
+```text
+multa = Σ over temporadas t where t.fecha_multa is set and past:
+          fracción_pendiente(t) × unidades × t.monto_multa_por_accion
 
-README item 6 says the fine is **not** proportional: 5.000 per acción or hectárea. The user is
-checking with the administration. Until that answer arrives, do not "correct" either formula
-and do not build reporting that assumes one of them.
+fracción_pendiente(t) = 1 − (abonado toward t by abonos dated ≤ t.fecha_multa) ÷ cuota(t)
+```
 
-Related and equally open: when an abono covers an old temporada, is it charged at that
-season's `valor_accion` or today's? (README item 23 — the user does not remember.)
+Four rules, each decided separately:
+
+1. **Proportional, not flat.** This **overrides README item 6** ("Multa no es proporcial, es
+   5.000 por accion o por hectarea"), which was the client's earlier understanding. Do not
+   restore the flat model from that line; the README is a backlog, not a spec.
+2. **Measured at the deadline, not live.** `fracción_pendiente` counts only abonos dated on or
+   before that temporada's `fecha_multa`. Abonos paid afterwards do not shrink the fine.
+   This is the rule that makes the fine collectable at all: because abonos cover the deuda
+   before the multas (D3), a fine measured against the *current* balance falls to zero the
+   moment the cuota is settled, so nobody would ever pay one. Frozen-at-deadline keeps the
+   fine a pure function of stored data — no crystallised rows, no scheduled job, which matters
+   on an app that only runs when someone opens it.
+3. **The denominator is the cuota alone** — `valor_accion × unidades`. That temporada's cargos
+   are excluded: they carry their own `pagado` flag, and a multa por atraso computed on top of
+   an unpaid multa por inasistencia would be a fine on a fine.
+4. **Gated on the date.** A temporada generates a fine only when `fecha_multa` is set and has
+   passed. `fecha_multa IS NULL` means no fine for that season, ever. The current temporada
+   therefore stops being a special case.
+
+Consequence: `calcularMultas` (flat, `× (temporadas_adeudadas − 1)`) is wrong and goes away —
+the `− 1` was approximating rule 4 before there was a per-season deadline to test.
+`calcularMultaVencimiento` has the right shape but the wrong scope: applied once, to the active
+temporada only, at today's rate, against the live balance. Today `calcularDeuda` **adds both**,
+so a late shareholder with a backlog is charged twice.
+
+Consequence: the fine can no longer be derived from `temporadas_adeudadas`. That is a scalar
+count priced entirely at the active season's rate; this formula needs per-temporada debt
+carrying each season's own rate. See D13 and G4.
+
+Consequence: `fracción_pendiente` needs to know how much of each abono landed on which
+temporada, so the abono allocation (D3/G1) is now a prerequisite for the multa, not an
+independent piece of work.
 
 ### D7 — A propiedad is an enduring thing with its own identity · *decided, violated by the code*
 
@@ -156,40 +197,104 @@ because many historical records have no RUT on file.
 Consequence: no uniqueness constraint yet, and the Excel importer does not validate. If
 duplicates matter for identity, that is a new decision.
 
+### D13 — Debt is derived per temporada, not counted · *decided, not implemented*
+
+A shareholder owes temporada *t* when no `pago` exists for *t*. The set of owed seasons is
+derived from real `temporadas` rows, and each contributes its **own** `valor_accion`,
+`fecha_multa` and `monto_multa_por_accion`.
+
+This replaces the scalar model: `deudores_config.temporadas_adeudadas` is a count, and every
+formula multiplies it by the *active* season's rate, so an old season is silently repriced at
+today's cuota and today's fine. D6 cannot be computed that way — it reads a different multa
+amount per season.
+
+Consequence: seasons people currently owe must exist as `temporadas` rows with their real
+historical values. Backfilling them is a prerequisite for D6, and the data has to come from the
+administration — see open question 1.
+
+Consequence: `temporadas_adeudadas` survives only in its D4 role — a manual override for debt
+predating the app, or for a deal the administrator has struck. It stops being the primary
+source of the season count.
+
+Consequence: this settles README item 23 by construction — an old temporada is charged at its
+own `valor_accion`, because that is the row the calculation reads.
+
+### D14 — Debt predating the app is transcribed, not reconstructed · *decided; stored and imported, not yet shown*
+
+Pre-app debt enters as `deuda_inicial` rows (migration v13): one or more lines per accionista,
+each a `concepto`, a `tipo` of `CUOTA` or `MULTA`, and a `monto` taken from the
+administration's own records. It is never recalculated — the figure *is* the fact.
+
+This replaces backfilling historical temporadas as the way old debt enters, and it is the
+better answer: the administration's paper figures are authoritative, where a reconstruction
+from rates the app never saw would only ever be a guess. Backfilling temporada rows remains
+worth doing for reporting, but it is no longer a prerequisite for anything.
+
+Lines rather than one total per accionista, so a per-temporada breakdown and a single lump both
+fit without a schema change either way.
+
+No `pagado` column, unlike `cargo_accionistas`. `deuda_inicial` is the oldest debt there is, so
+it sits first in the D3 allocation and what remains owed is derived from the abonos like
+everything else — which is also what makes partial payment work.
+
+Consequence: it is deliberately **not** a cargo, despite D5 making cargos the extension point
+for money beyond the cuota. A cargo is levied on a temporada at a `tarifa` and its per-person
+amount is recomputed from that tarifa (`deudores.ts` ignores the stored `cargo_accionistas.monto`),
+so a cargo cannot carry a figure that differs per accionista. An opening balance is not a charge.
+
+Consequence: `deuda_inicial` MULTA lines are excluded from `total_multas`, which counts only
+multas por atraso computed by D6. Whether the resumen contable reports them as multa income when
+collected is still open.
+
 ---
 
 ## 4. Known gaps — code does not implement a decided rule
 
 | | Gap | Rule violated |
 |---|---|---|
-| **G1** | Abonos are applied as an undifferentiated lump against the season subtotal; no oldest-first ordering, no deuda-before-multas ordering. `abonos.temporadas_cubiertas` is vestigial. | D3 |
-| **G2** | The payment form accepts any amount and still marks the temporada settled. Likely behind README items 7 and 15 ("cuadrito amarillo" showing wrong debt). | D2 |
+| **G2** | The payment form accepts any amount and still marks the temporada settled. | D2 |
 | **G3** | `accionistas:update` deletes and re-inserts all propiedades, destroying their ids on every save. | D7 |
-| **G4** | `temporadas_adeudadas` has no derived default; it is 1 until a human changes it. | D4 |
+| **G4** | Debt is the scalar `temporadas_adeudadas`, priced entirely at the *active* season's `valor_accion` and `monto_multa_por_accion`. There is no per-season derivation, and no default — it is 1 until a human changes it. | D13, D4 |
+| **G7** | `calcularDeuda`, `calcularMultas` and `calcularMultaVencimiento` still exist in `src/renderer/src/lib/formulas.ts` and still implement the old flat + double-charged multa. Nothing on screen calls them any more except the aviso (G8), but they are there to be picked up by mistake. | D6 |
+| **G8** | The aviso de cobranza and the deudores Excel export (`lib/export.ts`) still take a single `multaVencimiento` figure computed the old way, so a printed aviso can disagree with the screen. | D6 |
 | **G5** | Money is stored unrounded as `REAL`; rounding happens only at display. | D8 |
 | **G6** | The cargo amount formula (`fija` vs `proporcional`) is written twice — once in TypeScript, once in SQL inside `deudores.ts` and `cargos.ts`. Changing one silently diverges from the other. | — |
 
-None of these are safe to fix casually: G1, G2 and G5 all move numbers that the
+None of these are safe to fix casually: G2 and G5 both move numbers that the
 administration reconciles by hand against paper receipts.
+
+**Closed.** *G1* — abonos are now allocated explicitly by `calcularDeudaPorTemporada`
+(D3), and `deudores:get-deuda` / `deudores:list-deuda` are what the debt cards, the deudores
+listing and the pago form render. *G6* for the cargo formula — the SQL copy in `deudores.ts`
+now only resolves `fija` vs `proporcional` into a figure; the rules live in `src/shared/deuda.ts`.
+A related bug went with it: `abonos:create` used to flip every pending cargo to `pagado` once
+the total abonado reached their sum, so the same money paid the cargos *and* counted in full
+against the cuota. Coverage is derived now; `pagado` means settled by a pago or by hand.
 
 ---
 
 ## 5. Open questions
 
-1. **Flat or proportional late multa?** (D6) — user is asking the administration. Blocks any
-   multa work.
-2. **Old temporada at old or current `valor_accion`?** (D6) — blocks G1.
-3. **Is `numero_ingreso` unique?** It is the number of a physical receipt book, entered by
+1. **Do collected `deuda_inicial` MULTA lines count as multa income in the resumen contable?**
+   (D14) — they are real fines, but they were not computed by D6 and belong to seasons the app
+   never managed.
+2. **Is `numero_ingreso` unique?** It is the number of a physical receipt book, entered by
    hand, and nothing enforces uniqueness. Migration v7 zeroed all existing values.
-4. **Does RUT uniqueness matter?** (D12)
+3. **Does RUT uniqueness matter?** (D12)
 
 ---
 
 ## 6. Verification reality
 
-There are no tests — no unit, no e2e (README item 29 asks for them). `npm run typecheck` is
-the only automated gate. Every money rule above is therefore unverified by machine: the only
-check on `calcularDeuda`, the abono allocation and the multa formulas is a person comparing
-the screen against paper.
+There is now an integration suite: `npm test` bundles `tests/flows/*.test.ts` with esbuild,
+swaps `electron` for an in-process stub, and runs the real IPC handlers against a real SQLite
+file on the Electron binary. It covers the handlers and, in `tests/flows/deuda.test.ts`, the
+D3/D6 money rules as worked scenarios.
+
+What it does **not** cover: the renderer. `calcularDeuda` in
+`src/renderer/src/lib/formulas.ts`, the debt cards, the pago form and the PDF/Excel exports are
+still checked only by a person comparing the screen against paper. Since the multa engine in
+`src/shared/deuda.ts` is not yet wired into any of those (see G7), the numbers a user actually
+sees remain unverified.
 
 Treat that as the main risk when changing anything in §3 or §4.

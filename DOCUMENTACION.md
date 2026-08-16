@@ -77,15 +77,15 @@ Representa a cada titular de derechos de agua.
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `id` | INTEGER PK | Identificador único |
-| `numero` | TEXT | Número de propiedad principal (campo legado, usar `propiedades`) |
-| `nombre` | TEXT NOT NULL | Nombre del accionista (debe ser único) |
-| `tipo` | TEXT | Tipo principal: `PARCELA`, `SITIO`, o `PEQUEÑO_PROPIETARIO` |
-| `acciones` | REAL | Acciones totales (campo legado; el sistema suma desde `propiedades`) |
-| `hectareas` | REAL | Hectáreas totales (campo legado; ídem) |
+| `nombre` | TEXT NOT NULL | Nombre del accionista |
+| `apellido_paterno` | TEXT | Apellido paterno |
+| `apellido_materno` | TEXT | Apellido materno |
+| `rut` | TEXT | RUT, validado con módulo 11 si se ingresa |
+| `numero_socio` | TEXT | N° de socio asignado por la asociación; identifica al accionista en la importación del listado |
 | `activo` | INTEGER (0/1) | Si está inactivo, no aparece en la lista de deudores ni en formularios |
 | `notas` | TEXT | Observaciones libres |
 
-> **Nota:** Los campos `acciones`, `hectareas` y `numero` en `accionistas` son datos legados. El sistema usa la tabla `propiedades` para calcular los totales reales. Siempre se muestran los valores agregados desde `propiedades`.
+> **Nota:** `accionistas` no guarda acciones ni hectáreas. Los totales siempre se suman desde `propiedades`.
 
 ### 3.3 Tabla `propiedades`
 
@@ -95,7 +95,7 @@ Cada fila es una propiedad individual de un accionista. Un accionista puede tene
 |-------|------|-------------|
 | `id` | INTEGER PK | Identificador único |
 | `accionista_id` | INTEGER FK | Referencia al accionista dueño |
-| `numero` | TEXT | Número de la propiedad (ej. "84", "14", "47-A") |
+| `nombre` | TEXT | Nombre de la propiedad tal como aparece en el listado (ej. "Parcela N°8 Lote A-2") |
 | `tipo` | TEXT | `PARCELA`, `SITIO`, o `PEQUEÑO_PROPIETARIO` |
 | `acciones` | REAL | Acciones de esta propiedad específica |
 | `hectareas` | REAL | Hectáreas de esta propiedad específica |

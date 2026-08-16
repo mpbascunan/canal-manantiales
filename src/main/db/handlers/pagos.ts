@@ -3,13 +3,10 @@ import { getDb } from '../connection'
 import type { PagoInput } from '../../../shared/types'
 
 const JOIN_SQL = `
-  SELECT p.*, a.nombre AS accionista_nombre, pf.tipo AS accionista_tipo,
-         t.nombre AS temporada_nombre
+  SELECT p.*, a.nombre AS accionista_nombre, t.nombre AS temporada_nombre
   FROM pagos p
   JOIN accionistas a ON a.id = p.accionista_id
   JOIN temporadas t ON t.id = p.temporada_id
-  LEFT JOIN propiedades pf ON pf.accionista_id = a.id
-         AND pf.id = (SELECT MIN(id) FROM propiedades WHERE accionista_id = a.id)
 `
 
 export function registerPagoHandlers(): void {

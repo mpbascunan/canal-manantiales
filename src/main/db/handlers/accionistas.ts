@@ -2,30 +2,26 @@ import { ipcMain } from 'electron'
 import { getDb } from '../connection'
 import type { AccionistaInput } from '../../../shared/types'
 
-// Reusable SQL fragment: joins propiedades to compute totals
+// Reusable SQL fragment: aggregates each accionista's propiedades
 const PROPS_AGG = `
   LEFT JOIN (
     SELECT accionista_id,
            SUM(acciones)  AS total_acciones,
            SUM(hectareas) AS total_hectareas,
            GROUP_CONCAT(
-             CASE WHEN numero IS NOT NULL AND TRIM(numero) != '' THEN numero ELSE NULL END,
+             CASE WHEN nombre IS NOT NULL AND TRIM(nombre) != '' THEN nombre ELSE NULL END,
              ', '
-           ) AS numeros
+           ) AS nombres_propiedades
     FROM propiedades
     GROUP BY accionista_id
   ) pt ON pt.accionista_id = a.id
-  LEFT JOIN propiedades pf ON pf.accionista_id = a.id
-         AND pf.id = (SELECT MIN(id) FROM propiedades WHERE accionista_id = a.id)
 `
 
 const ACCIONISTA_COLS = `
   a.id, a.nombre, a.apellido_paterno, a.apellido_materno, a.rut, a.numero_socio, a.activo, a.notas,
   COALESCE(pt.total_acciones, 0)   AS acciones,
   COALESCE(pt.total_hectareas, 0) AS hectareas,
-  pf.tipo                          AS tipo,
-  pf.numero                        AS numero,
-  pt.numeros                       AS numeros
+  pt.nombres_propiedades           AS nombres_propiedades
 `
 
 const SELECT_BASE = `SELECT ${ACCIONISTA_COLS} FROM accionistas a ${PROPS_AGG}`
@@ -66,9 +62,9 @@ export function registerAccionistaHandlers(): void {
       const newId = r.lastInsertRowid as number
       for (const p of props) {
         db.prepare(
-          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas, direccion, marco)
+          `INSERT INTO propiedades (accionista_id, nombre, tipo, acciones, hectareas, direccion, marco)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(newId, p.numero ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.marco ?? null)
+        ).run(newId, p.nombre ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.marco ?? null)
       }
       return newId
     })()
@@ -98,9 +94,9 @@ export function registerAccionistaHandlers(): void {
       db.prepare('DELETE FROM propiedades WHERE accionista_id = ?').run(input.id)
       for (const p of props) {
         db.prepare(
-          `INSERT INTO propiedades (accionista_id, numero, tipo, acciones, hectareas, direccion, marco)
+          `INSERT INTO propiedades (accionista_id, nombre, tipo, acciones, hectareas, direccion, marco)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(input.id, p.numero ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.marco ?? null)
+        ).run(input.id, p.nombre ?? null, p.tipo, p.acciones, p.hectareas, p.direccion ?? null, p.marco ?? null)
       }
     })()
 

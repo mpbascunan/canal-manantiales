@@ -48,7 +48,23 @@ const api = {
     list: (temporadaId: number) => ipcRenderer.invoke('deudores:list', temporadaId),
     getConfig: (accionistaId: number, temporadaId: number) =>
       ipcRenderer.invoke('deudores:get-config', accionistaId, temporadaId),
-    upsertConfig: (cfg: any) => ipcRenderer.invoke('deudores:upsert-config', cfg)
+    upsertConfig: (cfg: any) => ipcRenderer.invoke('deudores:upsert-config', cfg),
+    getDeuda: (accionistaId: number, hoy?: string) =>
+      ipcRenderer.invoke('deudores:get-deuda', accionistaId, hoy),
+    listDeuda: (hoy?: string) => ipcRenderer.invoke('deudores:list-deuda', hoy)
+  },
+  // Deuda inicial — debt carried in from before the app existed
+  deudaInicial: {
+    previewImport: (rows: any[]) => ipcRenderer.invoke('import:preview-deuda-inicial', rows),
+    import: (rows: any[]) => ipcRenderer.invoke('import:deuda-inicial', rows),
+    list: () => ipcRenderer.invoke('deuda-inicial:list'),
+    listByAccionista: (accionistaId: number) =>
+      ipcRenderer.invoke('deuda-inicial:list-by-accionista', accionistaId),
+    create: (input: any) => ipcRenderer.invoke('deuda-inicial:create', input),
+    update: (linea: any) => ipcRenderer.invoke('deuda-inicial:update', linea),
+    delete: (id: number) => ipcRenderer.invoke('deuda-inicial:delete', id),
+    replaceForAccionista: (accionistaId: number, lineas: any[]) =>
+      ipcRenderer.invoke('deuda-inicial:replace-for-accionista', accionistaId, lineas)
   },
   // Cargos
   cargos: {
@@ -74,8 +90,8 @@ const api = {
     previewAccionistas: (rows: any[]) => ipcRenderer.invoke('import:preview-accionistas', rows),
     previewPagos: (rows: any[], temporadaId: number) => ipcRenderer.invoke('import:preview-pagos', rows, temporadaId),
     accionistas: (rows: any[]) => ipcRenderer.invoke('import:accionistas', rows),
-    pagos: (rows: any[], temporadaId: number) =>
-      ipcRenderer.invoke('import:pagos', rows, temporadaId)
+    pagos: (rows: any[], temporadaId: number, asignaciones: Record<string, number> = {}) =>
+      ipcRenderer.invoke('import:pagos', rows, temporadaId, asignaciones)
   }
 }
 

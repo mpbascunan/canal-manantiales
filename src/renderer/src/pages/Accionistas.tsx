@@ -4,7 +4,7 @@ import { api } from '../lib/ipc'
 import { calcularMontoAcciones, calcularMultas, calcularTotal } from '../lib/formulas'
 import type { Accionista, Temporada } from '../../../shared/types'
 import { nombreCompleto } from '../../../shared/types'
-import { AccionistaModal, type AccionistaEditForm } from '../components/AccionistaModal'
+import { AccionistaModal, BLANK_PROPIEDAD, type AccionistaEditForm } from '../components/AccionistaModal'
 
 function formatNum(n: number): string {
   return n > 0 ? n.toLocaleString('es-CL', { maximumFractionDigits: 4 }) : '—'
@@ -55,7 +55,7 @@ export default function Accionistas() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     return list.filter(a =>
-      (!q || nombreCompleto(a).toLowerCase().includes(q) || (a.numeros ?? a.numero ?? '').toLowerCase().includes(q))
+      (!q || nombreCompleto(a).toLowerCase().includes(q) || (a.nombres_propiedades ?? '').toLowerCase().includes(q))
     )
   }, [list, search])
 
@@ -63,7 +63,7 @@ export default function Accionistas() {
     setEditing({
       nombre: '', apellido_paterno: '', apellido_materno: '', rut: '', numero_socio: '',
       activo: true, notas: '',
-      propiedades: [{ numero: '', tipo: 'PARCELA', acciones: 0, hectareas: 0, direccion: '', marco: '' }]
+      propiedades: [BLANK_PROPIEDAD]
     })
     setIsNew(true)
   }
@@ -72,11 +72,11 @@ export default function Accionistas() {
     const props = await api.propiedades.list(a.id)
     const propiedades = props.length > 0
       ? props.map((p: any) => ({
-          id: p.id, numero: p.numero ?? '', tipo: p.tipo,
+          id: p.id, nombre: p.nombre ?? '', tipo: p.tipo,
           acciones: p.acciones, hectareas: p.hectareas,
           direccion: p.direccion ?? '', marco: p.marco ?? ''
         }))
-      : [{ numero: a.numero ?? '', tipo: a.tipo, acciones: a.acciones, hectareas: a.hectareas, direccion: '', marco: '' }]
+      : [BLANK_PROPIEDAD]
     setEditing({
       id: a.id, nombre: a.nombre,
       apellido_paterno: a.apellido_paterno ?? '', apellido_materno: a.apellido_materno ?? '',
@@ -95,7 +95,7 @@ export default function Accionistas() {
       numero_socio: editing.numero_socio || null,
       activo: editing.activo, notas: editing.notas || null,
       propiedades: editing.propiedades.map(p => ({
-        ...p, numero: p.numero || null, direccion: p.direccion || null,
+        ...p, nombre: p.nombre || null, direccion: p.direccion || null,
         marco: p.marco || null
       }))
     }
@@ -140,8 +140,8 @@ export default function Accionistas() {
               <tr key={a.id} className="table-row cursor-pointer" onClick={() => navigate(`/accionistas/${a.id}`)}>
                 <td className="px-4 py-2 text-gray-500 text-xs">{a.numero_socio ?? '—'}</td>
                 <td className="px-4 py-2 font-medium">{nombreCompleto(a)}</td>
-                <td className="px-4 py-2 text-gray-500 text-xs max-w-[120px] truncate" title={a.numeros ?? a.numero ?? ''}>
-                  {a.numeros ?? a.numero ?? '—'}
+                <td className="px-4 py-2 text-gray-500 text-xs max-w-[200px] truncate" title={a.nombres_propiedades ?? ''}>
+                  {a.nombres_propiedades ?? '—'}
                 </td>
                 <td className="px-4 py-2 text-right tabular-nums">{formatNum(a.acciones)}</td>
                 <td className="px-4 py-2 text-right tabular-nums">{formatNum(a.hectareas)}</td>

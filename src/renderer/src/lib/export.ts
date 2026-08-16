@@ -9,15 +9,14 @@ import { nombreCompleto } from '../../../shared/types'
 
 export function exportPagosMes(pagos: Pago[], year: number, month: number): void {
   const mes = mesNombre(month).toUpperCase()
-  const headers = ['Fecha', 'N° Ingreso', 'Accionista', 'Acciones', 'Hectáreas',
+  const headers = ['Fecha', 'N° Ingreso', 'Accionista',
                    'N° Temporadas', 'Monto Acciones', 'Multas', 'Total']
   const rows = pagos.map(p => [
     formatFecha(p.fecha), p.numero_ingreso, p.accionista_nombre,
-    p.accionista_tipo === 'PEQUEÑO_PROPIETARIO' ? '' : '',
-    '', p.temporadas_pagadas,
+    p.temporadas_pagadas,
     p.monto_acciones, p.multas, p.total
   ])
-  const totals = ['TOTALES', '', '', '', '', '',
+  const totals = ['TOTALES', '', '', '',
     pagos.reduce((s, p) => s + p.monto_acciones, 0),
     pagos.reduce((s, p) => s + p.multas, 0),
     pagos.reduce((s, p) => s + p.total, 0)
@@ -26,7 +25,7 @@ export function exportPagosMes(pagos: Pago[], year: number, month: number): void
   const wb = XLSX.utils.book_new()
   const wsData = [[`MES: ${mes} ${year}`], headers, ...rows, totals]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
-  ws['!cols'] = [14, 10, 30, 10, 10, 12, 16, 12, 12, 12, 14].map(w => ({ wch: w }))
+  ws['!cols'] = [14, 10, 30, 12, 16, 12, 14].map(w => ({ wch: w }))
   XLSX.utils.book_append_sheet(wb, ws, `${mes} ${year}`)
   XLSX.writeFile(wb, `Pagos_${mes}_${year}.xlsx`)
 }
@@ -76,16 +75,16 @@ export function exportResumenContable(
 
 export function exportDeudores(deudores: Deudor[], temporada: Temporada): void {
   const wb = XLSX.utils.book_new()
-  const headers = ['Accionista', 'N°', 'Acciones', 'Hectáreas', 'N° Temporadas',
+  const headers = ['Accionista', 'Propiedades', 'Acciones', 'Hectáreas', 'N° Temporadas',
                    'Monto Adeudado', 'Multas', 'Total']
   const rows = deudores.map(d => [
-    nombreCompleto(d), (d as any).numeros ?? d.numero ?? '',
+    nombreCompleto(d), d.nombres_propiedades ?? '',
     d.acciones || '', d.hectareas || '',
     d.temporadas_adeudadas, d.monto_adeudado, d.multas, d.total
   ])
   const wsData = [[`DEUDORES TEMPORADA ${temporada.nombre}`], headers, ...rows]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
-  ws['!cols'] = [30, 14, 10, 10, 12, 16, 12, 14].map(w => ({ wch: w }))
+  ws['!cols'] = [30, 36, 10, 10, 12, 16, 12, 14].map(w => ({ wch: w }))
   XLSX.utils.book_append_sheet(wb, ws, 'Deudores')
   XLSX.writeFile(wb, `Deudores_${temporada.nombre}.xlsx`)
 }
@@ -182,6 +181,15 @@ const PROP_TIPO_LABELS: Record<AccionistaType, string> = {
   PEQUEÑO_PROPIETARIO: 'Propiedad pequeña'
 }
 
+/**
+ * How a property is named on paper. The listado's own name ("Parcela N°8 Lote
+ * A-2") is what the accionista recognises, so it wins; the tipo is only a
+ * fallback for properties typed in by hand without one.
+ */
+function etiquetaPropiedad(p: Pick<Propiedad, 'nombre' | 'tipo'>): string {
+  return p.nombre?.trim() || PROP_TIPO_LABELS[p.tipo]
+}
+
 export interface AvisoCargo {
   nombre: string
   monto: number
@@ -221,17 +229,12 @@ function buildAvisosCobroDoc(
     let propY = 49
     if (propiedades.length > 0) {
       propiedades.forEach((p, pi) => {
-        const label = PROP_TIPO_LABELS[p.tipo]
-        const num = p.numero ? ` N° ${p.numero}` : ''
-        doc.text(`${label}${num}`, 14, propY + pi * 6)
+        doc.text(etiquetaPropiedad(p), 14, propY + pi * 6)
       })
       propY += propiedades.length * 6
-    } else {
-      const displayNumeros = a.numeros || a.numero
-      if (displayNumeros) {
-        doc.text(`N° Parcela/Sitio: ${displayNumeros}`, 14, propY)
-        propY += 6
-      }
+    } else if (a.nombres_propiedades) {
+      doc.text(`Propiedad: ${a.nombres_propiedades}`, 14, propY, { maxWidth: 182 })
+      propY += 6
     }
 
     // ── Info fields ───────────────────────────────────────────
@@ -253,13 +256,11 @@ function buildAvisosCobroDoc(
     if (propiedades.length > 1) {
       // Per-property breakdown
       propiedades.forEach(p => {
-        const label = PROP_TIPO_LABELS[p.tipo]
-        const num = p.numero ? ` N° ${p.numero}` : ''
         const propMonto = valorAccion * (p.acciones + p.hectareas)
         const parts: string[] = []
         if (p.acciones > 0) parts.push(`${formatNumber(p.acciones)} acc`)
         if (p.hectareas > 0) parts.push(`${formatNumber(p.hectareas)} ha`)
-        bodyRows.push([`${label}${num}  (${parts.join(' + ')})`, formatCLP(propMonto)])
+        bodyRows.push([`${etiquetaPropiedad(p)}  (${parts.join(' + ')})`, formatCLP(propMonto)])
       })
       if (multaVencimiento > 0 || cargosAviso.length > 0) {
         bodyRows.push([
@@ -367,8 +368,9 @@ export function exportComprobanteAbono(data: ComprobanteAbonoData): void {
   doc.setFontSize(10).setFont('helvetica', 'normal')
   doc.text(`Accionista: ${nombreCompleto(accionista)}`, 14, 42)
 
-  const displayNumeros = accionista.numeros || accionista.numero
-  if (displayNumeros) doc.text(`N° Parcela/Sitio: ${displayNumeros}`, 14, 49)
+  if (accionista.nombres_propiedades) {
+    doc.text(`Propiedad: ${accionista.nombres_propiedades}`, 14, 49, { maxWidth: 182 })
+  }
 
   doc.setFontSize(9)
   doc.setFont('helvetica', 'bold').text('Fecha:', 14, 56)

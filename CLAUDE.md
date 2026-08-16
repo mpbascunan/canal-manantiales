@@ -7,16 +7,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run dev        # electron-vite dev (hot reload for renderer, restart for main)
 npm run build      # bundles to out/ — esbuild strips types WITHOUT checking them
-npm run typecheck  # the only automated gate; run before finishing a change
+npm run typecheck  # tsc over all three projects; run before finishing a change
+npm test           # integration suite in tests/ (real SQLite, real IPC handlers)
 npm run dist       # build + electron-builder → release/
 ```
 
-There is **no test framework** in this project — no Jest/Vitest, no e2e (item 29 in the
-README backlog asks for it). `npm run typecheck` is the only check available; verify
-behavior by running the app.
+`npm run typecheck` and `npm test` are the two automated gates. There is still **no UI or
+e2e test** (item 29 in the README backlog asks for those) — verify screen behavior by
+running the app.
 
-`typecheck` runs `tsc --noEmit` against `tsconfig.node.json` and `tsconfig.web.json`
-separately, because the root `tsconfig.json` is a solution file (`"files": []`) — running
+`typecheck` runs `tsc --noEmit` against `tsconfig.node.json`, `tsconfig.web.json` and
+`tsconfig.test.json` separately, because the root `tsconfig.json` is a solution file
+(`"files": []`) — running
 `tsc --noEmit` there follows no references and silently checks **nothing**, exiting 0 on a
 tree full of errors. Do not "simplify" it back. Never use `tsc -b` either: these projects
 are `composite` with no `outDir`, so build mode emits `.js`/`.d.ts` next to every source
@@ -24,6 +26,17 @@ file.
 
 `postinstall` runs `electron-rebuild` for `better-sqlite3`; after changing Node or Electron
 versions, rerun `npm install` or the app will fail to open the database.
+
+`npm test` runs `tests/` through `scripts/run-tests.mjs`: esbuild bundles each
+`tests/flows/*.test.ts` (rewriting `import … from 'electron'` to `tests/helpers/electron.ts`,
+which collects `ipcMain.handle` registrations into a Map) and the bundles run on the Electron
+binary under `ELECTRON_RUN_AS_NODE=1` — plain `node` cannot load the Electron-ABI build of
+`better-sqlite3`. Tests call `invoke('<channel>', …)` exactly as the renderer does, against a
+real SQLite file in a throwaway directory. `npm test <substring>` runs matching files only.
+
+Test files run **one at a time** (`--test-concurrency=1`). They share that one SQLite file, so
+under the default parallel runner they reset each other's rows mid-test — the symptom is a
+scattering of failures that all pass when their file is run alone.
 
 Windows installers are built by `.github/workflows/build-windows.yml`, which is
 `workflow_dispatch` only and publishes a GitHub release tagged from `package.json` version.
@@ -115,8 +128,7 @@ must be changed in both places:
 - **Charge amount**: `tipo_tarifa = 'fija'` → flat `tarifa`; otherwise `tarifa × (acciones + hectareas)`.
 - **Shareholder totals**: `acciones`/`hectareas` no longer exist on `accionistas` — they are
   always `SUM`ed from `propiedades` through the `PROPS_AGG` join fragment (copied verbatim
-  into both handlers), which also builds the `numeros` list and picks the first property's
-  `tipo`/`numero` as the primary.
+  into both handlers), which also builds the `nombres_propiedades` list.
 
 A shareholder counts as a debtor when they have no `pago` for the season **or** any unpaid
 `cargo` — a late charge re-opens an otherwise settled account.

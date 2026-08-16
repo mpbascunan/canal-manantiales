@@ -10,6 +10,7 @@ import { registerPropiedadHandlers } from './db/handlers/propiedades'
 import { registerAbonoHandlers } from './db/handlers/abonos'
 import { registerCargoHandlers } from './db/handlers/cargos'
 import { registerRespaldoHandlers } from './db/handlers/respaldo'
+import { registerDeudaInicialHandlers } from './db/handlers/deudaInicial'
 
 function createWindow(): BrowserWindow {
   const iconFile = process.platform === 'win32' ? 'icon.ico' : 'icon.png'
@@ -64,6 +65,7 @@ app.whenReady().then(() => {
   registerAbonoHandlers()
   registerCargoHandlers()
   registerRespaldoHandlers()
+  registerDeudaInicialHandlers()
 
   createWindow()
 

@@ -104,6 +104,11 @@ export interface AccionistaEditForm {
   propiedades: PropiedadInput[]
 }
 
+/** A property row with nothing filled in, for a form that needs to start somewhere. */
+export const BLANK_PROPIEDAD: PropiedadInput = {
+  nombre: '', tipo: 'PARCELA', acciones: 0, hectareas: 0, direccion: '', marco: ''
+}
+
 export const EMPTY_ACCIONISTA_FORM: AccionistaEditForm = {
   nombre: '',
   apellido_paterno: '',
@@ -112,7 +117,7 @@ export const EMPTY_ACCIONISTA_FORM: AccionistaEditForm = {
   numero_socio: '',
   activo: true,
   notas: '',
-  propiedades: [{ numero: '', tipo: 'PARCELA', acciones: 0, hectareas: 0, direccion: '', marco: '' }]
+  propiedades: [BLANK_PROPIEDAD]
 }
 
 export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
@@ -134,7 +139,7 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
 
   const addPropiedad = () => {
     const lastTipo = value.propiedades[value.propiedades.length - 1]?.tipo ?? 'PARCELA'
-    set({ propiedades: [...value.propiedades, { numero: '', tipo: lastTipo, acciones: 0, hectareas: 0, direccion: '', marco: '' }] })
+    set({ propiedades: [...value.propiedades, { ...BLANK_PROPIEDAD, tipo: lastTipo }] })
   }
 
   const removePropiedad = (i: number) => {
@@ -211,14 +216,14 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
             <div className="space-y-3">
               {value.propiedades.map((p, i) => (
                 <div key={i} className="bg-gray-50 rounded p-3 space-y-2">
-                  {/* Row 1: N°, Tipo, Acciones, Hectáreas, Remove */}
+                  {/* Row 1: Nombre, Tipo, Acciones, Hectáreas, Remove */}
                   <div className="flex gap-2 items-center">
                     <input
-                      className="input w-20 text-sm"
-                      placeholder="N°"
-                      value={p.numero ?? ''}
-                      onChange={e => setPropiedad(i, { numero: e.target.value })}
-                      title="Número de parcela/sitio"
+                      className="input flex-1 text-sm"
+                      placeholder="Nombre de la propiedad"
+                      value={p.nombre ?? ''}
+                      onChange={e => setPropiedad(i, { nombre: e.target.value })}
+                      title="Nombre de la propiedad, ej. Parcela N°8 Lote A-2"
                     />
                     <select
                       className="input flex-1 text-sm"

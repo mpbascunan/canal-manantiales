@@ -15,7 +15,8 @@ export interface Temporada {
 export interface Propiedad {
   id: number
   accionista_id: number
-  numero: string | null
+  /** As named on the administration's listing, e.g. "Parcela N°8 Lote A-2". */
+  nombre: string | null
   tipo: AccionistaType
   acciones: number
   hectareas: number
@@ -25,7 +26,7 @@ export interface Propiedad {
 
 export interface PropiedadInput {
   id?: number
-  numero?: string | null
+  nombre?: string | null
   tipo: AccionistaType
   acciones: number
   hectareas: number
@@ -35,16 +36,15 @@ export interface PropiedadInput {
 
 export interface Accionista {
   id: number
-  numero: string | null   // primary number (first propiedad or legacy)
-  numeros: string | null  // all numbers joined: "84, 14, 47-A"
+  /** Every propiedad's name, joined: "Parcela N°8, Sitio N°4 Lote 4-A". */
+  nombres_propiedades: string | null
   nombre: string
   apellido_paterno: string | null
   apellido_materno: string | null
   rut: string | null
   numero_socio: string | null
-  tipo: AccionistaType    // primary tipo (first propiedad or legacy)
-  acciones: number        // total from all propiedades (or legacy)
-  hectareas: number       // total from all propiedades (or legacy)
+  acciones: number        // SUM over propiedades
+  hectareas: number       // SUM over propiedades
   activo: boolean
   notas: string | null
 }
@@ -79,7 +79,6 @@ export interface Pago {
   created_at: string
   // joined
   accionista_nombre?: string
-  accionista_tipo?: AccionistaType
   temporada_nombre?: string
 }
 
@@ -127,6 +126,34 @@ export interface DeudorConfig {
   accionista_id: number
   temporada_id: number
   temporadas_adeudadas: number
+}
+
+/**
+ * One line of debt carried in from before the app existed, transcribed from the
+ * administration's records (context.md D14). Never recalculated; how much of it
+ * is still owed comes from the abono allocation, not from a stored flag.
+ */
+export interface DeudaInicial {
+  id: number
+  accionista_id: number
+  /** Free text, e.g. "Multa temporada 2024-2025". Shown on the aviso. */
+  concepto: string
+  tipo: 'CUOTA' | 'MULTA'
+  monto: number
+  notas: string | null
+  created_at: string
+}
+
+export type DeudaInicialInput = Omit<DeudaInicial, 'id' | 'created_at'> & {
+  notas?: string | null
+}
+
+/** A `deuda_inicial` row joined to the accionista it belongs to. */
+export interface DeudaInicialConAccionista extends DeudaInicial {
+  nombre: string
+  apellido_paterno: string | null
+  apellido_materno: string | null
+  numero_socio: string | null
 }
 
 export interface Deudor extends Accionista {

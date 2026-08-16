@@ -569,7 +569,7 @@ export default function Cargos() {
                           <div className="text-sm font-medium text-gray-800 truncate">{a.nombre}</div>
                           <div className="text-xs text-gray-400">
                             {a.acciones + a.hectareas} (acc + ha)
-                            {a.numeros ? ` · N° ${a.numeros}` : a.numero ? ` · N° ${a.numero}` : ''}
+                            {a.nombres_propiedades ? ` · ${a.nombres_propiedades}` : ''}
                           </div>
                         </div>
                         {formTarifa > 0 && (

@@ -1,13 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from './ipc'
-import {
-  calcularMontoAcciones, calcularMultas, calcularMultaVencimiento,
-  tieneMultaVencimiento, calcularTotal, calcularDeuda,
-  toISODate, formatFecha
-} from './formulas'
+import { calcularMontoAcciones, calcularTotal, toISODate } from './formulas'
 import { exportComprobanteAbono } from './export'
 import type { Accionista, Temporada } from '../../../shared/types'
+import type { DeudaPorTemporada } from '../../../shared/deuda'
 import { nombreCompleto } from '../../../shared/types'
 
 export type Mode = 'completo' | 'abono'
@@ -59,6 +56,7 @@ export function usePagoForm() {
     total_cargos_pagados: 0
   })
 
+  const [deuda, setDeuda] = useState<DeudaPorTemporada | null>(null)
   const [cargosDetalle, setCargosDetalle] = useState<{ id: number; nombre: string; monto: number; pagado: boolean }[]>([])
   const [printComprobante, setPrintComprobante] = useState(false)
   const [existingPago, setExistingPago] = useState<{ id: number; fecha: string; total: number } | null>(null)
@@ -80,24 +78,6 @@ export function usePagoForm() {
     })
   }, [])
 
-  const totalOweComputed = (acc: Accionista | null, t: Temporada | null, cfg: DeudorConfig) => {
-    if (!acc || !t) return calcularDeuda({ valorAccion: 0, acciones: 0, hectareas: 0, temporadasAdeudadas: 1, totalAbonado: 0, totalCargos: 0, totalCargosPagados: 0, montoPorAccion: 0, multaVencimiento: 0 })
-    const multaVenc = tieneMultaVencimiento(t)
-      ? calcularMultaVencimiento(acc.acciones, acc.hectareas, t.monto_multa_por_accion, t.valor_accion, cfg.total_abonado)
-      : 0
-    return calcularDeuda({
-      valorAccion:         t.valor_accion,
-      acciones:            acc.acciones,
-      hectareas:           acc.hectareas,
-      temporadasAdeudadas: cfg.temporadas_adeudadas,
-      totalAbonado:        cfg.total_abonado,
-      totalCargos:         cfg.total_cargos,
-      totalCargosPagados:  cfg.total_cargos_pagados,
-      montoPorAccion:      t.monto_multa_por_accion,
-      multaVencimiento:    multaVenc
-    })
-  }
-
   const selectAccionistaWith = (a: Accionista, t: Temporada | null) => {
     setSelectedAcc(a)
     setSearch(nombreCompleto(a))
@@ -115,28 +95,28 @@ export function usePagoForm() {
       Promise.all([
         api.pagos.listByAccionista(a.id),
         api.deudores.getConfig(a.id, t.id),
-        api.cargos.listByAccionista(a.id, t.id)
-      ]).then(([pagos, cfg, cargos]: [any[], DeudorConfig, any[]]) => {
+        api.cargos.listByAccionista(a.id, t.id),
+        // The whole picture across temporadas (D13): the same figure the debt
+        // card shows, so the two can no longer disagree (README 15).
+        api.deudores.getDeuda(a.id)
+      ]).then(([pagos, cfg, cargos, d]: [any[], DeudorConfig, any[], DeudaPorTemporada]) => {
         const dup = pagos.find((p: any) => p.temporada_id === t.id)
         setExistingPago(dup ?? null)
         setDeudorConfig(cfg)
+        setDeuda(d)
         setCargosDetalle(cargos.map(c => ({ id: c.id, nombre: c.nombre, monto: c.monto, pagado: !!c.pagado })))
 
-        const adeudadas = cfg.temporadas_adeudadas ?? 1
-        const multaPrevias = calcularMultas(a.acciones, a.hectareas, adeudadas, t.monto_multa_por_accion)
-        const multaVenc = tieneMultaVencimiento(t)
-          ? calcularMultaVencimiento(a.acciones, a.hectareas, t.monto_multa_por_accion, t.valor_accion, cfg.total_abonado)
-          : 0
-        setForm(prev => {
-          const newMonto = calcularMontoAcciones(t.valor_accion, a.acciones, a.hectareas, adeudadas)
-          return { ...prev, temporadas_pagadas: adeudadas, monto_acciones: newMonto, multas: multaPrevias + multaVenc }
-        })
-        if (dup) {
-          setAbonoForm(prev => ({ ...prev, monto: Math.max(0, cfg.total_cargos - cfg.total_cargos_pagados) }))
-        } else {
-          const deuda = totalOweComputed(a, t, cfg)
-          setAbonoForm(prev => ({ ...prev, monto: deuda.pendiente }))
-        }
+        // A "pago completo" settles everything outstanding, so the form is
+        // seeded from the derived breakdown rather than from a season count.
+        const cuotas = d.temporadas.reduce((s, x) => s + x.pendiente_cuota, 0)
+        const multas = d.temporadas.reduce((s, x) => s + x.pendiente_multa, 0)
+        setForm(prev => ({
+          ...prev,
+          temporadas_pagadas: Math.max(1, d.temporadas.filter(x => x.pendiente_cuota > 0).length),
+          monto_acciones: cuotas,
+          multas
+        }))
+        setAbonoForm(prev => ({ ...prev, monto: d.total_pendiente }))
       })
     }
   }
@@ -161,43 +141,23 @@ export function usePagoForm() {
   // Computed
   const total = calcularTotal(form.monto_acciones, form.multas)
   const abonoTotal = calcularTotal(abonoForm.monto, abonoForm.multas)
-  const deudaBreakdown = totalOweComputed(selectedAcc, activeTemporada ?? null, deudorConfig)
-  const yaAbonado = deudorConfig.total_abonado
-  const pendiente = deudaBreakdown.pendiente
-  const hasUnpaidCargos = deudorConfig.total_cargos > deudorConfig.total_cargos_pagados
-  const pendingCargosAmount = Math.max(0, deudorConfig.total_cargos - deudorConfig.total_cargos_pagados)
-  const pendienteParaAbono = (existingPago && hasUnpaidCargos) ? pendingCargosAmount : pendiente
+  const yaAbonado = deuda?.total_abonado ?? 0
+  const pendiente = deuda?.total_pendiente ?? 0
+  const pendingCargosAmount = deuda
+    ? deuda.temporadas.reduce((s, t) => s + t.pendiente_cargos, 0)
+    : 0
+  const hasUnpaidCargos = pendingCargosAmount > 0
+  const pendienteParaAbono = pendiente
   const cargosPendientesDetalle = cargosDetalle.filter(c => !c.pagado)
 
-  const multaDetalle: { nombre: string; monto: number }[] = []
-  if (selectedAcc && activeTemporada) {
-    const previas = calcularMultas(
-      selectedAcc.acciones, selectedAcc.hectareas,
-      deudorConfig.temporadas_adeudadas, activeTemporada.monto_multa_por_accion
-    )
-    if (previas > 0) {
-      const n = deudorConfig.temporadas_adeudadas - 1
-      multaDetalle.push({
-        nombre: `Multa por ${n} temporada${n !== 1 ? 's' : ''} adeudada${n !== 1 ? 's' : ''}`,
-        monto: previas
-      })
-    }
-    if (tieneMultaVencimiento(activeTemporada)) {
-      const venc = calcularMultaVencimiento(
-        selectedAcc.acciones, selectedAcc.hectareas,
-        activeTemporada.monto_multa_por_accion, activeTemporada.valor_accion,
-        deudorConfig.total_abonado
-      )
-      if (venc > 0) {
-        multaDetalle.push({
-          nombre: `Multa por vencimiento (plazo ${formatFecha(activeTemporada.fecha_multa!)})`,
-          monto: venc
-        })
-      }
-    }
-  }
+  // One line per temporada that carries a fine, each at its own rate (D6) —
+  // a single "multas" figure cannot be checked against the paper record.
+  const multaDetalle: { nombre: string; monto: number }[] = (deuda?.temporadas ?? [])
+    .filter(t => t.pendiente_multa > 0)
+    .map(t => ({ nombre: `Multa por atraso ${t.nombre}`, monto: t.pendiente_multa }))
+
   const restanteTras = Math.max(0, pendienteParaAbono - abonoTotal)
-  const totalCompleto = deudaBreakdown.pendiente
+  const totalCompleto = pendiente
   const filteredAcc = accionistas
     .filter(a => nombreCompleto(a).toLowerCase().includes(search.toLowerCase()))
     .slice(0, 8)
@@ -269,7 +229,7 @@ export function usePagoForm() {
     // Computed
     total,
     abonoTotal,
-    deudaBreakdown,
+    deuda,
     yaAbonado,
     pendiente,
     hasUnpaidCargos,

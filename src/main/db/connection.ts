@@ -7,7 +7,7 @@ let db: Database.Database
 
 // Must match the highest version handled in runMigrations(). A database created
 // from SCHEMA below is already at this version and must skip all migrations.
-const LATEST_VERSION = 12
+const LATEST_VERSION = 14
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS temporadas (
@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS accionistas (
 CREATE TABLE IF NOT EXISTS propiedades (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   accionista_id INTEGER NOT NULL REFERENCES accionistas(id) ON DELETE CASCADE,
-  numero        TEXT,
+  -- How the administration names the property on its own listing, e.g.
+  -- "Parcela N°8 Lote A-2". Replaces the old bare numero column: the listing
+  -- identifies a property by this name, and it is what the aviso prints.
+  nombre        TEXT,
   tipo          TEXT    NOT NULL CHECK(tipo IN ('PARCELA','SITIO','PEQUEÑO_PROPIETARIO')),
   acciones      REAL    NOT NULL DEFAULT 0,
   hectareas     REAL    NOT NULL DEFAULT 0,
@@ -100,6 +103,23 @@ CREATE TABLE IF NOT EXISTS cargo_accionistas (
 );
 CREATE INDEX IF NOT EXISTS idx_cargo_accionistas_cargo      ON cargo_accionistas(cargo_id);
 CREATE INDEX IF NOT EXISTS idx_cargo_accionistas_accionista ON cargo_accionistas(accionista_id);
+
+-- Debt an accionista carried into the system from before the app existed, typed
+-- in from the administration's own records. Not a cargo: a cargo is levied on a
+-- temporada at a tarifa, this is an opening balance with a figure already known.
+-- One row per line so a per-temporada breakdown and a single lump both fit.
+-- No "pagado" column: it is the oldest debt in the abono allocation, so what is
+-- still owed is derived, and partial payment works like everything else.
+CREATE TABLE IF NOT EXISTS deuda_inicial (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  accionista_id INTEGER NOT NULL REFERENCES accionistas(id) ON DELETE CASCADE,
+  concepto      TEXT    NOT NULL,
+  tipo          TEXT    NOT NULL CHECK(tipo IN ('CUOTA','MULTA')),
+  monto         REAL    NOT NULL DEFAULT 0,
+  notas         TEXT,
+  created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_deuda_inicial_accionista ON deuda_inicial(accionista_id);
 `
 
 function hasColumn(database: Database.Database, table: string, column: string): boolean {
@@ -378,6 +398,46 @@ function runMigrations(database: Database.Database, dbPath: string): void {
       if (!hasColumn(database, 'accionistas', 'rut')) database.prepare('ALTER TABLE accionistas ADD COLUMN rut TEXT').run()
     })()
     database.pragma('user_version = 12')
+  }
+
+  if (version < 13) {
+    // v13: Opening balances for debt predating the app. Purely additive — no
+    // existing row is read or rewritten, and `temporadas_adeudadas` is left
+    // exactly as it is until someone transcribes the real figures.
+    database.transaction(() => {
+      database.prepare(`
+        CREATE TABLE IF NOT EXISTS deuda_inicial (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          accionista_id INTEGER NOT NULL REFERENCES accionistas(id) ON DELETE CASCADE,
+          concepto      TEXT    NOT NULL,
+          tipo          TEXT    NOT NULL CHECK(tipo IN ('CUOTA','MULTA')),
+          monto         REAL    NOT NULL DEFAULT 0,
+          notas         TEXT,
+          created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `).run()
+      database.prepare(
+        'CREATE INDEX IF NOT EXISTS idx_deuda_inicial_accionista ON deuda_inicial(accionista_id)'
+      ).run()
+    })()
+    database.pragma('user_version = 13')
+  }
+
+  if (version < 14) {
+    // v14: propiedades.numero → propiedades.nombre. The administration's listing
+    // identifies a property by its name ("Parcela N°8 Lote A-2"), not by a bare
+    // number, so that is what is stored and what the aviso prints. The old
+    // numbers are dropped rather than converted: the listing is re-imported in
+    // full, and it carries the real names.
+    database.transaction(() => {
+      if (!hasColumn(database, 'propiedades', 'nombre')) {
+        database.prepare('ALTER TABLE propiedades ADD COLUMN nombre TEXT').run()
+      }
+      if (hasColumn(database, 'propiedades', 'numero')) {
+        database.prepare('ALTER TABLE propiedades DROP COLUMN numero').run()
+      }
+    })()
+    database.pragma('user_version = 14')
   }
 }
 

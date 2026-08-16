@@ -17,7 +17,7 @@
 12. algunos deberian tener hectareas. corregir datos probando con excel
 13. no a todos les aparecen las propiedades. CORREGIDO CREO
 14. qa en formulario pago y poner restricciones.
-15. monto adeudado diferente en cuadro amarillo y cuadro de pago.si
+15. monto adeudado diferente en cuadro amarillo y cuadro de pago.resueltooo
 16. AVISO DE COBRANZA SI
 17. desglose por sitio y parcela en aviso.si
 18. crear numero de ingreso en boleta, es un numero de talonario fisico, se ingresa al momento de pagar.creo, probar
@@ -31,9 +31,20 @@ marco: canal principal, el cerrillo, cerro al peñon, el durazno, la luquita, lo
 
 22. probar cargos, poner multas y todo eso.
 23. abonos deben contemplar temporadas antiguas primero, al precio de ahora o de antes? no me acuerdo
-24, en resumen contable ingresos por multa debe contener los dos tipos de multa en los cargos, por separado no mas y se elimina el campo ingreso por multa
-25. campo multa y cuota extra y otros en page accionistas esta demas, poner campos de cargos.
-26. si se le agrega un cargo a un accionista pero ya tebia todo pagado, entonces poner como deudor por el cargo.
+24. en resumen contable ingresos por multa debe contener los dos tipos de multa en los cargos, por separado no mas y se elimina el campo ingreso por multa. no lo elimine pero contiene la suma
+25. campo multa y cuota extra y otros en page accionistas esta demas, poner campos de cargos. si
+26. si se le agrega un cargo a un accionista pero ya tebia todo pagado, entonces poner como deudor por el cargo.si
 27. en abono dar opcion de elegir lo que se esta pagando.?
-28. elminar campos comuna y sector.
+28. elminar campos comuna y sector.si
 29. agregar tests e2e.
+30. cuando new pago, indicar de qué es la multa cobrada. si
+31. como redondeo o aproximo los valores que tienen decimal.
+32. probar excels.
+33. cambiar accionista de propiedad.
+34. agregar campo rut a accinoista.si
+35. subdivision de propiedades.
+36. agregar propiedad y reemplazar por numero.
+37. sacar pagos de la temporada en un excel.
+
+
+temp 26 27 empieza en marzo, y termina 28 de febrero, se abono del antiguo al mas nuevo, cubre primero la dueda y ak ultimoa las multas

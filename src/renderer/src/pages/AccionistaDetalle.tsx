@@ -2,13 +2,17 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../lib/ipc'
 import {
-  calcularDeuda, calcularMultaVencimiento, tieneMultaVencimiento,
+  calcularMultaVencimiento, tieneMultaVencimiento,
   formatCLP, formatFecha, formatNumber
 } from '../lib/formulas'
 import { exportAvisosCobro, previewAvisoCobro } from '../lib/export'
-import type { Accionista, Pago, Temporada, Propiedad, Abono, Cargo } from '../../../shared/types'
+import type {
+  Accionista, Pago, Temporada, Propiedad, Abono, Cargo
+} from '../../../shared/types'
+import type { DeudaPorTemporada } from '../../../shared/deuda'
 import { nombreCompleto } from '../../../shared/types'
-import { AccionistaModal, type AccionistaEditForm } from '../components/AccionistaModal'
+import { AccionistaModal, BLANK_PROPIEDAD, type AccionistaEditForm } from '../components/AccionistaModal'
+import { DeudaInicialPanel } from '../components/DeudaInicialPanel'
 
 const TIPO_LABELS: Record<string, string> = {
   PARCELA: 'Parcela', SITIO: 'Sitio', 'PEQUEÑO_PROPIETARIO': 'Pequeño Propietario'
@@ -33,6 +37,7 @@ export default function AccionistaDetalle() {
   const [cargos, setCargos] = useState<(Cargo & { monto: number; pagado: number })[]>([])
   const [editForm, setEditForm] = useState<AccionistaEditForm | null>(null)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
+  const [deudaCompleta, setDeudaCompleta] = useState<DeudaPorTemporada | null>(null)
 
   const reload = () => {
     const aid = Number(id)
@@ -41,13 +46,16 @@ export default function AccionistaDetalle() {
       api.pagos.listByAccionista(aid),
       api.abonos.listByAccionista(aid),
       api.propiedades.list(aid),
-      api.temporadas.getActive()
-    ]).then(([a, ps, abs, props, t]) => {
+      api.temporadas.getActive(),
+      // Every temporada at once (D13) — the debt is no longer a single-season figure.
+      api.deudores.getDeuda(aid)
+    ]).then(([a, ps, abs, props, t, d]) => {
       setAccionista(a)
       setPagos(ps)
       setAbonos(abs)
       setPropiedades(props)
       setTemporada(t)
+      setDeudaCompleta(d)
       // Load debt config and cargos for the active temporada
       if (t) {
         api.deudores.getConfig(aid, t.id).then(setDeudorConfig)
@@ -63,11 +71,11 @@ export default function AccionistaDetalle() {
     const props = await api.propiedades.list(accionista.id)
     const propiedades = props.length > 0
       ? props.map((p: any) => ({
-          id: p.id, numero: p.numero ?? '', tipo: p.tipo,
+          id: p.id, nombre: p.nombre ?? '', tipo: p.tipo,
           acciones: p.acciones, hectareas: p.hectareas,
           direccion: p.direccion ?? '', marco: p.marco ?? ''
         }))
-      : [{ numero: accionista.numero ?? '', tipo: accionista.tipo, acciones: accionista.acciones, hectareas: accionista.hectareas, direccion: '', marco: '' }]
+      : [BLANK_PROPIEDAD]
     setEditForm({
       id: accionista.id, nombre: accionista.nombre,
       apellido_paterno: accionista.apellido_paterno ?? '', apellido_materno: accionista.apellido_materno ?? '',
@@ -86,7 +94,7 @@ export default function AccionistaDetalle() {
       numero_socio: editForm.numero_socio || null,
       activo: editForm.activo, notas: editForm.notas || null,
       propiedades: editForm.propiedades.map(p => ({
-        ...p, numero: p.numero || null, direccion: p.direccion || null,
+        ...p, nombre: p.nombre || null, direccion: p.direccion || null,
         marco: p.marco || null
       }))
     })
@@ -96,41 +104,13 @@ export default function AccionistaDetalle() {
 
   if (!accionista) return <div className="text-gray-400 p-8">Cargando...</div>
 
-  const totalAcc   = pagos.reduce((s, p) => s + p.monto_acciones, 0) + abonos.reduce((s, a) => s + a.monto, 0)
   const grandTotal = pagos.reduce((s, p) => s + p.total, 0)          + abonos.reduce((s, a) => s + a.total, 0)
 
-  const totalCargos        = cargos.reduce((s, c) => s + c.monto, 0)
-  const totalCargosPagados = cargos.filter(c => c.pagado).reduce((s, c) => s + c.monto, 0)
-  const unpaidCargosAmount = totalCargos - totalCargosPagados
-
-  // Full payment registered for the active season
-  const hasFullPaymentThisSeason = temporada
-    ? pagos.some(p => p.temporada_id === temporada.id)
-    : false
-
-  // "Paid" only when full payment exists AND no cargos added after it remain unpaid
-  const hasPaidThisSeason = hasFullPaymentThisSeason && unpaidCargosAmount === 0
-
+  // The active temporada's multa, still needed by the aviso until export.ts is
+  // rewritten to take the per-temporada breakdown.
   const multaVencimiento = (temporada && accionista && deudorConfig && tieneMultaVencimiento(temporada))
     ? calcularMultaVencimiento(accionista.acciones, accionista.hectareas, temporada.monto_multa_por_accion, temporada.valor_accion, deudorConfig.total_abonado)
     : 0
-
-  const deuda = (temporada && accionista && deudorConfig)
-    ? calcularDeuda({
-        valorAccion:          temporada.valor_accion,
-        acciones:             accionista.acciones,
-        hectareas:            accionista.hectareas,
-        temporadasAdeudadas:  deudorConfig.temporadas_adeudadas,
-        totalAbonado:         deudorConfig.total_abonado,
-        totalCargos,
-        totalCargosPagados,
-        montoPorAccion:       temporada.monto_multa_por_accion,
-        multaVencimiento
-      })
-    : null
-
-  const debtPendiente    = deuda?.pendiente ?? 0
-  const multasAnteriores = deuda ? deuda.multas - multaVencimiento : 0
 
   const handlePrintAviso = () => {
     if (!temporada) return
@@ -159,9 +139,9 @@ export default function AccionistaDetalle() {
       {/* Header card */}
       <div className="card p-5 flex items-start justify-between">
         <div>
-          {accionista.numeros && (
+          {accionista.nombres_propiedades && (
             <div className="mb-1">
-              <span className="text-gray-400 text-sm">N° {accionista.numeros}</span>
+              <span className="text-gray-400 text-sm">{accionista.nombres_propiedades}</span>
             </div>
           )}
           <h1 className="text-xl font-bold text-gray-900">{nombreCompleto(accionista)}</h1>
@@ -200,70 +180,11 @@ export default function AccionistaDetalle() {
         </div>
       </div>
 
-      {/* Active season debt status */}
-      {temporada && deudorConfig && (
-        <div className={`card p-4 flex items-start justify-between gap-6 ${
-          hasPaidThisSeason
-            ? 'border-green-200 bg-green-50'
-            : (hasFullPaymentThisSeason && unpaidCargosAmount > 0) || debtPendiente > 0
-              ? 'border-amber-200 bg-amber-50'
-              : 'border-gray-200'
-        }`}>
-          <div className="text-sm">
-            <span className="font-semibold text-gray-700">Temporada activa: </span>
-            <span className="text-gray-600">{temporada.nombre}</span>
-          </div>
+      {/* Debt across every temporada (D13), not just the active one */}
+      {deudaCompleta && <DeudaBreakdownCard deuda={deudaCompleta} />}
 
-          {hasPaidThisSeason ? (
-            <span className="text-green-700 font-semibold text-sm">✓ Pagado</span>
-          ) : hasFullPaymentThisSeason && unpaidCargosAmount > 0 ? (
-            <div className="text-right text-sm">
-              <div className="text-amber-700 font-semibold">
-                Cargos pendientes: {formatCLP(unpaidCargosAmount)}
-              </div>
-              <div className="text-xs text-gray-500">Cuota de temporada pagada</div>
-            </div>
-          ) : debtPendiente > 0 && deuda ? (
-            <div className="text-sm shrink-0">
-              <div className="text-amber-700 font-semibold text-right mb-2">
-                Pendiente: {formatCLP(debtPendiente)}
-              </div>
-              <div className="text-xs space-y-0.5 min-w-[260px]">
-                <div className="flex justify-between gap-8 text-gray-500">
-                  <span>Cuota de acciones ({deudorConfig.temporadas_adeudadas} temp.)</span>
-                  <span className="tabular-nums">{formatCLP(deuda.monto_acciones)}</span>
-                </div>
-                {multasAnteriores > 0 && (
-                  <div className="flex justify-between gap-8 text-gray-500">
-                    <span>Multas por atraso ({deudorConfig.temporadas_adeudadas - 1} temp.)</span>
-                    <span className="tabular-nums">{formatCLP(multasAnteriores)}</span>
-                  </div>
-                )}
-                {multaVencimiento > 0 && (
-                  <div className="flex justify-between gap-8 text-orange-600">
-                    <span>Multa por vencimiento</span>
-                    <span className="tabular-nums">{formatCLP(multaVencimiento)}</span>
-                  </div>
-                )}
-                {deuda.total_cargos_pendientes > 0 && (
-                  <div className="flex justify-between gap-8 text-gray-500">
-                    <span>Cargos pendientes</span>
-                    <span className="tabular-nums">{formatCLP(deuda.total_cargos_pendientes)}</span>
-                  </div>
-                )}
-                {deudorConfig.total_abonado > 0 && (
-                  <div className="flex justify-between gap-8 text-green-700">
-                    <span>Abonado</span>
-                    <span className="tabular-nums">−{formatCLP(deudorConfig.total_abonado)}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <span className="text-gray-400 text-sm">Sin deuda registrada</span>
-          )}
-        </div>
-      )}
+      {/* Debt carried in from before the system existed (D14) */}
+      <DeudaInicialPanel accionistaId={Number(id)} onChange={reload} />
 
       {/* Propiedades breakdown */}
       {propiedades.length > 0 && (
@@ -274,7 +195,7 @@ export default function AccionistaDetalle() {
           <table className="w-full text-sm">
             <thead>
               <tr className="table-header">
-                <th className="px-4 py-2 text-left">N°</th>
+                <th className="px-4 py-2 text-left">Propiedad</th>
                 <th className="px-4 py-2 text-left">Tipo</th>
                 <th className="px-4 py-2 text-left">Dirección</th>
                 <th className="px-4 py-2 text-left">Marco</th>
@@ -285,7 +206,7 @@ export default function AccionistaDetalle() {
             <tbody>
               {propiedades.map(p => (
                 <tr key={p.id} className="table-row">
-                  <td className="px-4 py-2 text-gray-500">{p.numero ?? '—'}</td>
+                  <td className="px-4 py-2 text-gray-500">{p.nombre ?? '—'}</td>
                   <td className="px-4 py-2">{TIPO_LABELS[p.tipo]}</td>
                   <td className="px-4 py-2 text-gray-600">{p.direccion ?? '—'}</td>
                   <td className="px-4 py-2 text-gray-600">{p.marco ?? '—'}</td>
@@ -299,25 +220,27 @@ export default function AccionistaDetalle() {
       )}
 
       {/* Totals summary */}
-      {(temporada && deudorConfig) && (() => {
-        const showMulta = temporada != null && tieneMultaVencimiento(temporada)
+      {deudaCompleta && (() => {
+        const showMulta = deudaCompleta.total_multas > 0
         const cols = showMulta ? 'grid-cols-3' : 'grid-cols-2'
-        const cuotaTooltip = (deuda && temporada && deudorConfig)
-          ? `${formatCLP(temporada.valor_accion)} × (${formatNumber(accionista.acciones)} acc. + ${formatNumber(accionista.hectareas)} há.) × ${deudorConfig.temporadas_adeudadas} temp.`
-          : undefined
-        const multaTooltip = (temporada && deudorConfig)
-          ? (() => {
-              const montoUnaTemporada = temporada.valor_accion * (accionista.acciones + accionista.hectareas)
-              const fraccion = montoUnaTemporada > 0
-                ? Math.max(0, 1 - Math.min(1, deudorConfig.total_abonado / montoUnaTemporada))
-                : 0
-              const pct = Math.round(fraccion * 100)
-              return `${formatCLP(temporada.monto_multa_por_accion)} × (${formatNumber(accionista.acciones)} acc. + ${formatNumber(accionista.hectareas)} há.) × ${pct}% pendiente`
-            })()
-          : undefined
+        const unidades = accionista.acciones + accionista.hectareas
         const cards: { label: string; value: number; tooltip?: string }[] = [
-          { label: 'Cuota de acciones', value: deuda?.monto_acciones ?? totalAcc, tooltip: cuotaTooltip },
-          ...(showMulta ? [{ label: 'Multa por vencimiento', value: multaVencimiento, tooltip: multaTooltip }] : []),
+          {
+            label: 'Cuotas adeudadas',
+            value: deudaCompleta.total_cuotas,
+            tooltip: deudaCompleta.temporadas
+              .filter(t => t.cuota > 0)
+              .map(t => `${t.nombre}: ${formatCLP(t.cuota)}`)
+              .join('\n') || undefined
+          },
+          ...(showMulta ? [{
+            label: 'Multas por atraso',
+            value: deudaCompleta.total_multas,
+            tooltip: deudaCompleta.temporadas
+              .filter(t => t.multa > 0)
+              .map(t => `${t.nombre}: ${formatCLP(t.multa)} (${formatNumber(unidades)} unid.)`)
+              .join('\n')
+          }] : []),
           { label: 'Total pagado', value: grandTotal }
         ]
         return (
@@ -476,6 +399,91 @@ export default function AccionistaDetalle() {
         </div>
       )}
 
+    </div>
+  )
+}
+
+/**
+ * The debt, temporada by temporada (D13). Each season shows its own cuota,
+ * cargos and multa rather than one aggregate figure, because each is priced at
+ * its own `valor_accion` and `monto_multa_por_accion` — a single total is
+ * impossible to check against paper.
+ */
+function DeudaBreakdownCard({ deuda }: { deuda: DeudaPorTemporada }) {
+  const pendiente = deuda.total_pendiente
+  const conDeuda = deuda.temporadas.filter(t => t.pendiente > 0)
+  const inicialPendiente = deuda.deuda_inicial.filter(l => l.pendiente > 0)
+
+  if (pendiente <= 0) {
+    return (
+      <div className="card p-4 flex items-center justify-between border-green-200 bg-green-50">
+        <span className="font-semibold text-sm text-gray-700">Estado de deuda</span>
+        <span className="text-green-700 font-semibold text-sm">✓ Sin deuda pendiente</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card overflow-hidden border-amber-200">
+      <div className="px-4 py-3 border-b border-amber-100 bg-amber-50 flex items-center justify-between">
+        <span className="font-semibold text-sm text-gray-700">Deuda pendiente</span>
+        <span className="text-amber-700 font-bold tabular-nums">{formatCLP(pendiente)}</span>
+      </div>
+
+      <div className="divide-y divide-gray-100">
+        {inicialPendiente.length > 0 && (
+          <div className="px-4 py-3">
+            <div className="text-xs font-semibold text-gray-600 mb-1.5">Temporadas anteriores al sistema</div>
+            <div className="space-y-0.5">
+              {inicialPendiente.map(l => (
+                <div key={l.id} className="flex justify-between text-xs text-gray-500">
+                  <span>{l.concepto}{l.abonado > 0 && ` · abonado ${formatCLP(l.abonado)}`}</span>
+                  <span className="tabular-nums">{formatCLP(l.pendiente)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {conDeuda.map(t => (
+          <div key={t.temporada_id} className="px-4 py-3">
+            <div className="flex justify-between items-baseline mb-1.5">
+              <span className="text-xs font-semibold text-gray-600">
+                {t.nombre}
+                {t.pagada && <span className="ml-2 font-normal text-green-700">cuota pagada</span>}
+              </span>
+              <span className="text-xs font-semibold text-gray-700 tabular-nums">{formatCLP(t.pendiente)}</span>
+            </div>
+            <div className="space-y-0.5">
+              {t.pendiente_cuota > 0 && (
+                <div className="flex justify-between text-xs text-gray-500">
+                  <span>Cuota{t.abonado > 0 && ` · abonado ${formatCLP(t.abonado)} de ${formatCLP(t.cuota)}`}</span>
+                  <span className="tabular-nums">{formatCLP(t.pendiente_cuota)}</span>
+                </div>
+              )}
+              {t.cargos.filter(c => c.pendiente > 0).map(c => (
+                <div key={c.cargo_id} className="flex justify-between text-xs text-gray-500">
+                  <span>{c.nombre}{c.abonado > 0 && ` · abonado ${formatCLP(c.abonado)}`}</span>
+                  <span className="tabular-nums">{formatCLP(c.pendiente)}</span>
+                </div>
+              ))}
+              {t.pendiente_multa > 0 && (
+                <div className="flex justify-between text-xs text-orange-600">
+                  <span>Multa por atraso{t.multa_abonada > 0 && ` · abonado ${formatCLP(t.multa_abonada)}`}</span>
+                  <span className="tabular-nums">{formatCLP(t.pendiente_multa)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {deuda.excedente > 0 && (
+        <div className="px-4 py-2 bg-green-50 border-t border-green-100 flex justify-between text-xs text-green-700">
+          <span>Excedente a favor</span>
+          <span className="tabular-nums">{formatCLP(deuda.excedente)}</span>
+        </div>
+      )}
     </div>
   )
 }

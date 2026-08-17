@@ -46,7 +46,6 @@ const TABLES = [
   'cargo_accionistas',
   'cargos',
   'deuda_inicial',
-  'deudores_config',
   'abonos',
   'pagos',
   'propiedades',

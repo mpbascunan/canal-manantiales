@@ -91,12 +91,29 @@ describe('abonos', () => {
     assert.equal(t.cargos[0].pendiente, 5_000)
   })
 
-  it('lists abonos by month', async () => {
+  it('stores whole pesos (D8)', async () => {
+    // An abono is drawn down against debts that are themselves rounded, so a
+    // fraction here would leave a cuota that never quite clears.
+    await abonar({ monto: 2_000.4, multas: 500.6, total: 2_501 })
+
+    const [abono] = await invoke<Abono[]>('abonos:list-by-accionista', accionista.id)
+    assert.equal(abono.monto, 2_000)
+    assert.equal(abono.multas, 501)
+    assert.equal(abono.total, 2_501)
+  })
+
+  it('lists abonos by month and by temporada', async () => {
+    const otra = await seedTemporada({ nombre: 'Temporada 2025-2026', activa: false })
     await abonar({ numero_ingreso: 1, fecha: '2024-06-15' })
     await abonar({ numero_ingreso: 2, fecha: '2024-07-02' })
+    await abonar({ numero_ingreso: 3, fecha: '2025-07-02', temporada_id: otra.id })
 
     const junio = await invoke<Abono[]>('abonos:list-by-month', 2024, 6)
     assert.deepEqual(junio.map(a => a.numero_ingreso), [1])
+
+    // Both halves of a temporada's ingresos are exported together (README 37).
+    const deLaTemporada = await invoke<Abono[]>('abonos:list-by-temporada', temporada.id)
+    assert.deepEqual(deLaTemporada.map(a => a.numero_ingreso), [1, 2])
   })
 
   it('deletes an abono', async () => {

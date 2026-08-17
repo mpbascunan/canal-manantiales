@@ -23,13 +23,21 @@ export const ipcMain = {
   }
 }
 
-/** Calls a registered handler with a dummy IpcMainInvokeEvent, as the renderer would. */
-export function invokeHandler(channel: string, ...args: any[]): Promise<any> {
+/**
+ * Calls a registered handler with a dummy IpcMainInvokeEvent, as the renderer would.
+ *
+ * `async` on purpose: the handlers are synchronous, and a `throw` inside one
+ * must reach the caller as a *rejection*, which is what `ipcRenderer.invoke`
+ * gives the renderer. Returning `Promise.resolve(handler(…))` let the throw
+ * escape synchronously instead, so a test asserting on a rejected channel — a
+ * duplicate N° socio, say — never saw one.
+ */
+export async function invokeHandler(channel: string, ...args: any[]): Promise<any> {
   const handler = handlers.get(channel)
   if (!handler) {
     throw new Error(`No handler registered for channel "${channel}"`)
   }
-  return Promise.resolve(handler({} as unknown, ...args))
+  return handler({} as unknown, ...args)
 }
 
 export function registeredChannels(): string[] {

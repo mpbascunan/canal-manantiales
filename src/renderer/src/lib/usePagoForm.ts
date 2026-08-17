@@ -9,13 +9,6 @@ import { nombreCompleto } from '../../../shared/types'
 
 export type Mode = 'completo' | 'abono'
 
-interface DeudorConfig {
-  temporadas_adeudadas: number
-  total_abonado: number
-  total_cargos: number
-  total_cargos_pagados: number
-}
-
 export function usePagoForm() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
@@ -47,13 +40,6 @@ export function usePagoForm() {
     monto: 0,
     multas: 0,
     notas: ''
-  })
-
-  const [deudorConfig, setDeudorConfig] = useState<DeudorConfig>({
-    temporadas_adeudadas: 1,
-    total_abonado: 0,
-    total_cargos: 0,
-    total_cargos_pagados: 0
   })
 
   const [deuda, setDeuda] = useState<DeudaPorTemporada | null>(null)
@@ -94,15 +80,13 @@ export function usePagoForm() {
     if (t) {
       Promise.all([
         api.pagos.listByAccionista(a.id),
-        api.deudores.getConfig(a.id, t.id),
         api.cargos.listByAccionista(a.id, t.id),
         // The whole picture across temporadas (D13): the same figure the debt
         // card shows, so the two can no longer disagree (README 15).
         api.deudores.getDeuda(a.id)
-      ]).then(([pagos, cfg, cargos, d]: [any[], DeudorConfig, any[], DeudaPorTemporada]) => {
+      ]).then(([pagos, cargos, d]: [any[], any[], DeudaPorTemporada]) => {
         const dup = pagos.find((p: any) => p.temporada_id === t.id)
         setExistingPago(dup ?? null)
-        setDeudorConfig(cfg)
         setDeuda(d)
         setCargosDetalle(cargos.map(c => ({ id: c.id, nombre: c.nombre, monto: c.monto, pagado: !!c.pagado })))
 
@@ -149,6 +133,10 @@ export function usePagoForm() {
   const hasUnpaidCargos = pendingCargosAmount > 0
   const pendienteParaAbono = pendiente
   const cargosPendientesDetalle = cargosDetalle.filter(c => !c.pagado)
+  /** The active temporada's cargos, at the amount `calcularMontoCargo` gives. */
+  const totalCargos = cargosDetalle.reduce((s, c) => s + c.monto, 0)
+  /** How many seasons the cuota shown covers — every one still owing one (D13). */
+  const temporadasConCuota = (deuda?.temporadas ?? []).filter(t => t.pendiente_cuota > 0).length
 
   // One line per temporada that carries a fine, each at its own rate (D6) —
   // a single "multas" figure cannot be checked against the paper record.
@@ -165,6 +153,10 @@ export function usePagoForm() {
   const handleSaveFull = async () => {
     if (!selectedAcc) return alert('Selecciona un accionista')
     if (!form.temporada_id) return alert('Selecciona una temporada')
+    // The button is disabled until the deuda loads, but the guard belongs here
+    // too: every amount below is derived from it, and a pago saved with the
+    // zeroes of the loading state would settle the temporada for nothing (D2).
+    if (!deuda) return alert('Todavía se está calculando la deuda, espera un momento')
     await api.pagos.create({
       numero_ingreso: form.numero_ingreso,
       accionista_id: selectedAcc.id,
@@ -217,7 +209,6 @@ export function usePagoForm() {
     selectedAcc,
     form, setForm,
     abonoForm, setAbonoForm,
-    deudorConfig,
     printComprobante, setPrintComprobante,
     existingPago,
     saved,
@@ -240,6 +231,8 @@ export function usePagoForm() {
     multaDetalle,
     cargosDetalle,
     cargosPendientesDetalle,
+    totalCargos,
+    temporadasConCuota,
     // Handlers
     handleSearchChange,
     selectAccionista,

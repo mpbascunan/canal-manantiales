@@ -1,3 +1,23 @@
+/**
+ * Formatting, and the two arithmetic helpers the pago form still uses.
+ *
+ * **There is no debt calculation here.** `calcularDeuda`, `calcularMultas`,
+ * `calcularMultaVencimiento` and `tieneMultaVencimiento` used to live in this
+ * file and implemented the old model: a flat multa multiplied by
+ * `temporadas_adeudadas − 1`, *plus* a second vencimiento multa, so a late
+ * shareholder with a backlog was fined twice — and every season was priced at
+ * the active season's rate. They were deleted with context.md G7. The one debt
+ * calculation is `calcularDeudaPorTemporada` in `src/shared/deuda.ts`; anything
+ * that needs a figure asks `deudores:get-deuda` or `deudores:list-deuda` for it.
+ */
+
+/**
+ * What a cuota comes to for `temporadas` seasons at one season's rate.
+ *
+ * Only for seeding the pago form before the real breakdown arrives — an
+ * hectárea is priced exactly as an acción (D1). Any figure that is saved or
+ * shown as debt comes from the engine, which reads each season's own rate.
+ */
 export function calcularMontoAcciones(
   valorAccion: number,
   acciones: number,
@@ -7,81 +27,11 @@ export function calcularMontoAcciones(
   return (valorAccion * acciones + valorAccion * hectareas) * temporadasPagadas
 }
 
-export function calcularMultas(
-  acciones: number,
-  hectareas: number,
-  temporadasAdeudadas: number,
-  montoPorAccion: number
-): number {
-  if (temporadasAdeudadas <= 1) return 0
-  return montoPorAccion * (acciones + hectareas) * (temporadasAdeudadas - 1)
-}
-
-export function tieneMultaVencimiento(temporada: { fecha_multa: string | null }): boolean {
-  if (!temporada.fecha_multa) return false
-  return new Date() > new Date(temporada.fecha_multa)
-}
-
-export function calcularMultaVencimiento(
-  acciones: number,
-  hectareas: number,
-  montoPorAccion: number,
-  valorAccion: number,
-  totalAbonado: number
-): number {
-  const montoUnaTemporada = valorAccion * (acciones + hectareas)
-  if (montoUnaTemporada === 0) return 0
-  const fraccionPendiente = Math.max(0, 1 - Math.min(1, totalAbonado / montoUnaTemporada))
-  return montoPorAccion * (acciones + hectareas) * fraccionPendiente
-}
-
 export function calcularTotal(
   montoAcciones: number,
   multas: number
 ): number {
   return montoAcciones + multas
-}
-
-export interface DeudaParams {
-  valorAccion: number
-  acciones: number
-  hectareas: number
-  temporadasAdeudadas: number
-  totalAbonado: number
-  totalCargos: number
-  totalCargosPagados: number
-  montoPorAccion: number
-  multaVencimiento: number
-}
-
-export interface DeudaBreakdown {
-  monto_acciones: number
-  multas: number
-  subtotal: number           // base debt without cargos
-  total_cargos: number
-  total_cargos_pendientes: number
-  total: number              // subtotal + total_cargos
-  abonado: number
-  pendiente: number          // max(0, subtotal - abonado) + total_cargos_pendientes
-}
-
-export function calcularDeuda(p: DeudaParams): DeudaBreakdown {
-  const monto_acciones = calcularMontoAcciones(p.valorAccion, p.acciones, p.hectareas, p.temporadasAdeudadas)
-  const multas = calcularMultas(p.acciones, p.hectareas, p.temporadasAdeudadas, p.montoPorAccion) + p.multaVencimiento
-  const subtotal = calcularTotal(monto_acciones, multas)
-  const total_cargos_pendientes = p.totalCargos - p.totalCargosPagados
-  const total = subtotal + p.totalCargos
-  const pendiente = Math.max(0, subtotal - p.totalAbonado) + total_cargos_pendientes
-  return {
-    monto_acciones,
-    multas,
-    subtotal,
-    total_cargos: p.totalCargos,
-    total_cargos_pendientes,
-    total,
-    abonado: p.totalAbonado,
-    pendiente
-  }
 }
 
 export function formatCLP(value: number): string {

@@ -38,6 +38,12 @@ interface PropiedadSinSocio {
   hoja: string
   fila: number
 }
+/** One N° Socio the file gives to two people who are not the same person (D17). */
+interface SocioConflicto {
+  numero_socio: string
+  nombres: string[]
+  propiedades: PropiedadPreviewRow[]
+}
 interface PagoPreviewRow {
   numero_ingreso: number
   fecha: string
@@ -100,6 +106,7 @@ export default function ImportarExcel() {
     nuevos: AccionistaPreviewGroup[]
     actualizados: AccionistaPreviewGroup[]
     sin_socio: PropiedadSinSocio[]
+    conflictos: SocioConflicto[]
     rows: any[]
   } | null>(null)
 
@@ -612,6 +619,7 @@ function AccionistasPreviewPanel({ preview, onConfirm, onCancel }: {
     nuevos: AccionistaPreviewGroup[]
     actualizados: AccionistaPreviewGroup[]
     sin_socio: PropiedadSinSocio[]
+    conflictos: SocioConflicto[]
   }
   onConfirm: () => void
   onCancel: () => void
@@ -621,6 +629,9 @@ function AccionistasPreviewPanel({ preview, onConfirm, onCancel }: {
   const propiedadesBorradas = preview.actualizados.reduce((s, g) => s + g.propiedades_actuales, 0)
   const renombrados = preview.actualizados.filter(g => g.nombre_actual)
   const hasSinSocio = preview.sin_socio.length > 0
+  // One N° Socio given to two different people (D17). Not importable: the
+  // number identifies one member, and merging them would move parcelas.
+  const conflictos = preview.conflictos ?? []
 
   return (
     <div className="space-y-4">
@@ -635,6 +646,9 @@ function AccionistasPreviewPanel({ preview, onConfirm, onCancel }: {
           <span className="text-gray-700 font-medium">{totalPropiedades} propiedades en total</span>
           {hasSinSocio && (
             <span className="text-amber-700 font-medium">⚠ {preview.sin_socio.length} filas sin N° Socio (se omitirán)</span>
+          )}
+          {conflictos.length > 0 && (
+            <span className="text-red-700 font-medium">✕ {conflictos.length} N° Socio repetidos entre distintos accionistas (se omitirán)</span>
           )}
         </div>
         {propiedadesBorradas > 0 && (
@@ -669,6 +683,24 @@ function AccionistasPreviewPanel({ preview, onConfirm, onCancel }: {
           color="blue"
           grupos={preview.actualizados}
         />
+      )}
+
+      {conflictos.length > 0 && (
+        <div className="card p-3 border-red-300 bg-red-50">
+          <p className="text-sm font-medium text-red-700 mb-2">
+            N° Socio asignados a más de un accionista (no se importarán):
+          </p>
+          <div className="max-h-32 overflow-y-auto text-xs space-y-0.5">
+            {conflictos.map(c => (
+              <div key={c.numero_socio} className="text-red-700">
+                • N° {c.numero_socio} — {c.nombres.join(' / ')} ({c.propiedades.length} propiedades)
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-red-600 mt-2">
+            El N° Socio identifica a un solo accionista. Corrige el archivo y vuelve a importar.
+          </p>
+        </div>
       )}
 
       {hasSinSocio && (

@@ -1,8 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/ipc'
-import { calcularMontoAcciones, calcularMultas, calcularTotal } from '../lib/formulas'
-import type { Accionista, Temporada } from '../../../shared/types'
+import type { Accionista } from '../../../shared/types'
 import { nombreCompleto } from '../../../shared/types'
 import { AccionistaModal, BLANK_PROPIEDAD, type AccionistaEditForm } from '../components/AccionistaModal'
 
@@ -14,43 +13,55 @@ type AccionistaConStatus = Accionista & {
   pago_temporada_activa?: number
   has_unpaid_cargos?: number
   total_abonado?: number
-  dc_temporadas_adeudadas?: number
 }
 
 export default function Accionistas() {
   const [list, setList] = useState<AccionistaConStatus[]>([])
-  const [activeTemporada, setActiveTemporada] = useState<Temporada | null>(null)
+  /** `total_pendiente` per accionista, from the one debt engine (D13). */
+  const [pendientes, setPendientes] = useState<Map<number, number>>(new Map())
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<AccionistaEditForm | null>(null)
   const [isNew, setIsNew] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const navigate = useNavigate()
 
   const load = async () => {
     const temporada = await api.temporadas.getActive()
-    setActiveTemporada(temporada ?? null)
-    if (temporada) {
-      const data = await api.accionistas.withPagoStatus(temporada.id)
-      setList(data)
-    } else {
-      const data = await api.accionistas.list()
-      setList(data)
-    }
+    // Every accionista, settled ones included: a row with no debt is exactly
+    // what marks it "Cubierto" below.
+    const [data, deudas] = await Promise.all([
+      temporada ? api.accionistas.withPagoStatus(temporada.id) : api.accionistas.list(),
+      api.deudores.listDeuda(undefined, true)
+    ])
+    setList(data)
+    setPendientes(new Map(deudas.map((d: any) => [d.id, d.deuda.total_pendiente])))
   }
 
+  /**
+   * "Cubierto" means the abonos already cover everything owed, without a pago
+   * row closing the season. It is read straight off the debt engine — this used
+   * to re-derive the total from `temporadas_adeudadas` at the active season's
+   * rate, and so disagreed with every other screen (context.md G4, G7).
+   */
   const pagoStatus = (a: AccionistaConStatus): 'pagado' | 'cubierto' | 'pendiente' => {
     if (a.pago_temporada_activa && !a.has_unpaid_cargos) return 'pagado'
-    if (a.pago_temporada_activa && a.has_unpaid_cargos) return 'pendiente'
-    if (!activeTemporada || !a.total_abonado || a.total_abonado <= 0) return 'pendiente'
-    const adeudadas = a.dc_temporadas_adeudadas ?? 1
-    if (adeudadas <= 0) return 'pendiente'
-    const totalDebt = calcularTotal(
-      calcularMontoAcciones(activeTemporada.valor_accion, a.acciones, a.hectareas, adeudadas),
-      calcularMultas(a.acciones, a.hectareas, adeudadas, activeTemporada.monto_multa_por_accion)
-    )
-    return a.total_abonado >= totalDebt ? 'cubierto' : 'pendiente'
+    const pendiente = pendientes.get(a.id)
+    if (pendiente !== undefined && pendiente <= 0) return 'cubierto'
+    return 'pendiente'
   }
 
   useEffect(() => { load() }, [])
+
+  /** Numbers already taken, so the form can say so before SQLite does (D17). */
+  const numerosSocioEnUso = useMemo(
+    () => new Set(
+      list
+        .filter(a => a.id !== editing?.id)
+        .map(a => (a.numero_socio ?? '').trim())
+        .filter(Boolean)
+    ),
+    [list, editing?.id]
+  )
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
@@ -99,8 +110,17 @@ export default function Accionistas() {
         marco: p.marco || null
       }))
     }
-    if (isNew) await api.accionistas.create(payload)
-    else await api.accionistas.update(payload)
+    // The N° socio is unique in the database (D17), so a collision the form did
+    // not catch — an inactive accionista holds it, another window just took it —
+    // comes back as an error here rather than as a silent failure to save.
+    try {
+      if (isNew) await api.accionistas.create(payload)
+      else await api.accionistas.update(payload)
+    } catch (e: any) {
+      setSaveError(String(e?.message ?? e).replace(/^Error invoking remote method '[^']*':\s*/, ''))
+      return
+    }
+    setSaveError(null)
     setEditing(null)
     load()
   }
@@ -174,9 +194,11 @@ export default function Accionistas() {
         <AccionistaModal
           value={editing}
           isNew={isNew}
-          onChange={setEditing}
+          numerosSocioEnUso={numerosSocioEnUso}
+          error={saveError}
+          onChange={f => { setSaveError(null); setEditing(f) }}
           onSave={save}
-          onClose={() => setEditing(null)}
+          onClose={() => { setSaveError(null); setEditing(null) }}
         />
       )}
     </div>

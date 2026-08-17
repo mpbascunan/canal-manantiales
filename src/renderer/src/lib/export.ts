@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { formatCLP, formatFecha, mesNombre, formatNumber } from './formulas'
-import type { Pago, ResumenMensual, ResumenContable, Temporada, Accionista, Propiedad, AccionistaType, CargoResumen } from '../../../shared/types'
+import type { Pago, Abono, ResumenMensual, ResumenContable, Temporada, Accionista, Propiedad, AccionistaType, CargoResumen } from '../../../shared/types'
 import { nombreCompleto } from '../../../shared/types'
 import { DEUDA_TIPO_LABELS } from './labels'
 import type { DeudaPorTemporada, TemporadaBreakdown } from '../../../shared/deuda'
@@ -30,6 +30,94 @@ export function exportPagosMes(pagos: Pago[], year: number, month: number): void
   ws['!cols'] = [14, 10, 30, 12, 16, 12, 14].map(w => ({ wch: w }))
   XLSX.utils.book_append_sheet(wb, ws, `${mes} ${year}`)
   XLSX.writeFile(wb, `Pagos_${mes}_${year}.xlsx`)
+}
+
+/**
+ * Every ingreso of one temporada in a single sheet: pagos and abonos merged,
+ * oldest first, grouped by month with a subtotal per month (README 37).
+ *
+ * Abonos are in it because a temporada's takings are not only its full payments
+ * — leaving them out would give a sheet whose total disagrees with the resumen
+ * contable, which sums both. The `Tipo` column is what tells them apart.
+ */
+export function exportPagosTemporada(pagos: Pago[], abonos: Abono[], temporada: Temporada): void {
+  interface Fila {
+    fecha: string
+    numero_ingreso: number
+    accionista: string
+    tipo: 'Pago' | 'Abono'
+    monto_acciones: number
+    multas: number
+    total: number
+  }
+
+  const filas: Fila[] = [
+    ...pagos.map((p): Fila => ({
+      fecha: p.fecha, numero_ingreso: p.numero_ingreso,
+      accionista: p.accionista_nombre ?? '', tipo: 'Pago',
+      monto_acciones: p.monto_acciones, multas: p.multas, total: p.total
+    })),
+    ...abonos.map((a): Fila => ({
+      fecha: a.fecha, numero_ingreso: a.numero_ingreso,
+      accionista: a.accionista_nombre ?? '', tipo: 'Abono',
+      monto_acciones: a.monto, multas: a.multas, total: a.total
+    }))
+  ].sort((a, b) => a.fecha.localeCompare(b.fecha) || a.numero_ingreso - b.numero_ingreso)
+
+  const headers = ['Fecha', 'N° Ingreso', 'Accionista', 'Tipo', 'Monto Acciones', 'Multas', 'Total']
+  const sum = (rows: Fila[], pick: (f: Fila) => number): number =>
+    rows.reduce((s, f) => s + pick(f), 0)
+
+  // `YYYY-MM` of each row, so the month subtotals follow the same order as the
+  // rows and no month can be missed or invented.
+  const body: any[][] = []
+  let mesActual = ''
+  let delMes: Fila[] = []
+
+  const cerrarMes = (): void => {
+    if (delMes.length === 0) return
+    const [anio, mes] = mesActual.split('-')
+    body.push([
+      `Total ${mesNombre(Number(mes))} ${anio}`, '', '', '',
+      sum(delMes, f => f.monto_acciones), sum(delMes, f => f.multas), sum(delMes, f => f.total)
+    ])
+    body.push([])
+  }
+
+  for (const f of filas) {
+    const mes = f.fecha.slice(0, 7)
+    if (mes !== mesActual) {
+      cerrarMes()
+      mesActual = mes
+      delMes = []
+    }
+    delMes.push(f)
+    body.push([
+      formatFecha(f.fecha), f.numero_ingreso, f.accionista, f.tipo,
+      f.monto_acciones, f.multas, f.total
+    ])
+  }
+  cerrarMes()
+
+  const totals = ['TOTALES', '', '', '',
+    sum(filas, f => f.monto_acciones), sum(filas, f => f.multas), sum(filas, f => f.total)
+  ]
+
+  const plural = (n: number, singular: string): string =>
+    `${n} ${singular}${n === 1 ? '' : 's'}`
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([
+    [`INGRESOS TEMPORADA ${temporada.nombre}`],
+    [`${plural(pagos.length, 'pago')} · ${plural(abonos.length, 'abono')}`],
+    [],
+    headers,
+    ...body,
+    totals
+  ])
+  ws['!cols'] = [14, 11, 32, 9, 16, 12, 14].map(w => ({ wch: w }))
+  XLSX.utils.book_append_sheet(wb, ws, 'Ingresos')
+  XLSX.writeFile(wb, `Pagos_Temporada_${temporada.nombre.replace(/[^\w-]+/g, '_')}.xlsx`)
 }
 
 // Cargos named "Multa..." count as multa income; the rest get their own row

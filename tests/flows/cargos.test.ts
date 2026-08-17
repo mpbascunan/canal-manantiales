@@ -41,6 +41,23 @@ describe('cargos', () => {
     assert.equal(cargo.tipo_tarifa, 'proporcional')
   })
 
+  it('rounds each amount to whole pesos, tarifa included (D8)', async () => {
+    // Grande has 4 acciones + 2 hectáreas, and hectáreas keep their decimals —
+    // the money derived from them does not.
+    const { id } = await crearCargo('proporcional', 333.4, [grande.id, chico.id])
+
+    const cargo = await invoke<CargoConAccionistas>('cargos:get-with-accionistas', id)
+    const montos = Object.fromEntries(cargo.accionistas.map(a => [a.nombre, a.monto]))
+
+    assert.equal(cargo.tarifa, 333)
+    assert.equal(montos.Grande, 1_998)   // 333 × 6
+    assert.equal(montos.Chico, 333)
+
+    // The listing recomputes from the tarifa, and must agree to the peso.
+    const listado = await invoke<{ monto: number }[]>('cargos:list-by-accionista', grande.id, temporada.id)
+    assert.equal(listado[0].monto, 1_998)
+  })
+
   it('charges the same tarifa to everyone for a cargo fijo', async () => {
     const { id } = await crearCargo('fija', 25_000, [grande.id, chico.id])
 

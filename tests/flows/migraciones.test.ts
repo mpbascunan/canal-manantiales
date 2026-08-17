@@ -43,8 +43,38 @@ function crearBaseV14(): void {
       notas         TEXT,
       created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE deudores_config (
+      accionista_id        INTEGER NOT NULL,
+      temporada_id         INTEGER NOT NULL,
+      temporadas_adeudadas INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY (accionista_id, temporada_id)
+    );
+    CREATE TABLE pagos (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      numero_ingreso     INTEGER NOT NULL,
+      accionista_id      INTEGER NOT NULL,
+      temporada_id       INTEGER NOT NULL,
+      fecha              TEXT    NOT NULL,
+      temporadas_pagadas INTEGER NOT NULL DEFAULT 1,
+      monto_acciones     REAL    NOT NULL DEFAULT 0,
+      multas             REAL    NOT NULL DEFAULT 0,
+      total              REAL    NOT NULL,
+      notas              TEXT,
+      created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
   `)
   db.prepare("INSERT INTO accionistas (id, nombre, numero_socio) VALUES (1, 'Juan Pérez', '7')").run()
+  // Duplicates of both kinds, so the v17 cleanup is actually exercised. The
+  // client's own data has none — this is the path that must not crash if it does.
+  db.prepare("INSERT INTO accionistas (id, nombre, numero_socio) VALUES (9, 'Otro Pérez', '7')").run()
+  db.prepare("INSERT INTO deudores_config VALUES (1, 1, 3)").run()
+  db.prepare(`
+    INSERT INTO pagos (id, numero_ingreso, accionista_id, temporada_id, fecha, total)
+    VALUES (1, 500, 1, 1, '2024-06-01', 40000),
+           (2, 500, 9, 1, '2024-06-02', 20000),
+           (3,   0, 1, 1, '2024-06-03', 10000),
+           (4,   0, 9, 1, '2024-06-04', 10000)
+  `).run()
   db.prepare(`
     INSERT INTO deuda_inicial (id, accionista_id, concepto, tipo, monto, notas, created_at)
     VALUES (5, 1, 'Cuota impaga 2023-2024', 'CUOTA', 480000, 'transcrita', '2025-01-02 10:00:00')
@@ -58,7 +88,7 @@ describe('migraciones sobre una base con datos', () => {
 
   it('brings a v14 database up to the latest version', () => {
     const version = getDb().pragma('user_version', { simple: true }) as number
-    assert.equal(version, 15)
+    assert.equal(version, 17)
   })
 
   it('backs the database up before touching it', () => {
@@ -121,5 +151,53 @@ describe('migraciones sobre una base con datos', () => {
       .all() as { name: string }[]
 
     assert.equal(indexes.some(i => i.name === 'idx_deuda_inicial_accionista'), true)
+  })
+
+  it('drops deudores_config, rows and all (D19)', () => {
+    const tabla = getDb()
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'deudores_config'")
+      .get()
+
+    assert.equal(tabla, undefined)
+  })
+
+  it('keeps every pago, and blanks only the duplicated receipt number (D16)', () => {
+    const pagos = getDb()
+      .prepare('SELECT id, numero_ingreso, total FROM pagos ORDER BY id')
+      .all() as { id: number; numero_ingreso: number; total: number }[]
+
+    // Nothing is deleted and no number is invented: the lowest id keeps 500,
+    // the later one falls back to "not recorded" for re-entry from the talonario.
+    assert.deepEqual(pagos.map(p => [p.id, p.numero_ingreso]), [[1, 500], [2, 0], [3, 0], [4, 0]])
+    assert.equal(pagos.reduce((s, p) => s + p.total, 0), 80_000, 'no money went missing')
+  })
+
+  it('leaves the unnumbered pagos alone — 0 is a state, not an identity', () => {
+    // Four rows, three of them at 0: a plain UNIQUE would have rejected this.
+    assert.doesNotThrow(() => getDb().prepare(
+      `INSERT INTO pagos (numero_ingreso, accionista_id, temporada_id, fecha, total)
+       VALUES (0, 1, 1, '2024-07-01', 5000)`
+    ).run())
+  })
+
+  it('refuses a receipt number that is already in use (D16)', () => {
+    assert.throws(() => getDb().prepare(
+      `INSERT INTO pagos (numero_ingreso, accionista_id, temporada_id, fecha, total)
+       VALUES (500, 1, 1, '2024-07-02', 5000)`
+    ).run(), /UNIQUE/)
+  })
+
+  it('keeps both accionistas, and clears only the duplicated N° socio (D17)', () => {
+    const socios = getDb()
+      .prepare('SELECT id, numero_socio FROM accionistas WHERE id IN (1, 9) ORDER BY id')
+      .all() as { id: number; numero_socio: string | null }[]
+
+    assert.deepEqual(socios, [{ id: 1, numero_socio: '7' }, { id: 9, numero_socio: null }])
+  })
+
+  it('refuses a N° socio that is already in use (D17)', () => {
+    assert.throws(() => getDb().prepare(
+      "INSERT INTO accionistas (nombre, numero_socio) VALUES ('Tercero', '7')"
+    ).run(), /UNIQUE/)
   })
 })

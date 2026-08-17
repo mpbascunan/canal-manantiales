@@ -45,6 +45,35 @@ describe('pago completo', () => {
     assert.equal(pago.temporada_nombre, temporada.nombre)
   })
 
+  it('stores whole pesos, whatever the form sends (D8)', async () => {
+    // CLP has no minor unit. Rounding only at display let a column of receipts
+    // add up to something other than the total printed beside them.
+    const pago = await pagar({ monto_acciones: 40_000.4, multas: 2_000.5, total: 42_000.9 })
+
+    assert.equal(pago.monto_acciones, 40_000)
+    assert.equal(pago.multas, 2_001)
+    assert.equal(pago.total, 42_001)
+
+    const [stored] = query<{ monto_acciones: number; multas: number; total: number }>(
+      'SELECT monto_acciones, multas, total FROM pagos WHERE id = ?', pago.id
+    )
+    assert.deepEqual(stored, { monto_acciones: 40_000, multas: 2_001, total: 42_001 })
+  })
+
+  it('refuses to reuse a receipt number (D16)', async () => {
+    await pagar({ numero_ingreso: 700 })
+
+    // One receipt from the physical talonario, one number, never reused.
+    await assert.rejects(() => pagar({ numero_ingreso: 700, fecha: '2024-07-01' }), /UNIQUE/)
+  })
+
+  it('accepts any number of pagos with no receipt number recorded', async () => {
+    await pagar({ numero_ingreso: 0 })
+    await pagar({ numero_ingreso: 0, fecha: '2024-07-01' })
+
+    assert.equal((await invoke<Pago[]>('pagos:list-by-accionista', accionista.id)).length, 2)
+  })
+
   it('settles every cargo of the temporada for that accionista', async () => {
     const otro = await seedAccionista('Otro', [{ nombre: '2', tipo: 'SITIO', acciones: 1, hectareas: 0 }])
     const { id: cargoId } = await invoke<{ id: number }>('cargos:create', {

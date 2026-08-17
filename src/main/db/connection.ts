@@ -7,7 +7,7 @@ let db: Database.Database
 
 // Must match the highest version handled in runMigrations(). A database created
 // from SCHEMA below is already at this version and must skip all migrations.
-const LATEST_VERSION = 15
+const LATEST_VERSION = 17
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS temporadas (
@@ -27,10 +27,17 @@ CREATE TABLE IF NOT EXISTS accionistas (
   apellido_paterno TEXT,
   apellido_materno TEXT,
   rut              TEXT,
+  -- The association's own identifier for a member: it identifies exactly one
+  -- (D17). RUT is deliberately *not* unique (D18) — this is the identity column.
   numero_socio     TEXT,
   activo           INTEGER NOT NULL DEFAULT 1,
   notas            TEXT
 );
+-- Partial, because "no number on file" is a real state and many records share
+-- it. Blank and NULL are both excluded; every actual number is unique (D17).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accionistas_numero_socio
+  ON accionistas(numero_socio)
+  WHERE TRIM(COALESCE(numero_socio, '')) != '';
 CREATE TABLE IF NOT EXISTS propiedades (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   accionista_id INTEGER NOT NULL REFERENCES accionistas(id) ON DELETE CASCADE,
@@ -61,6 +68,13 @@ CREATE TABLE IF NOT EXISTS pagos (
 CREATE INDEX IF NOT EXISTS idx_pagos_accionista ON pagos(accionista_id);
 CREATE INDEX IF NOT EXISTS idx_pagos_temporada  ON pagos(temporada_id);
 CREATE INDEX IF NOT EXISTS idx_pagos_fecha      ON pagos(fecha);
+-- One receipt from the physical talonario, one number, never reused (D16).
+-- Partial because 0 is the "no receipt number recorded" sentinel the form
+-- defaults to and migration v7 left behind: those rows are payments all the
+-- same, so they must not collide with each other.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pagos_numero_ingreso
+  ON pagos(numero_ingreso)
+  WHERE numero_ingreso > 0;
 CREATE TABLE IF NOT EXISTS abonos (
   id                   INTEGER PRIMARY KEY AUTOINCREMENT,
   numero_ingreso       INTEGER NOT NULL,
@@ -76,12 +90,11 @@ CREATE TABLE IF NOT EXISTS abonos (
 );
 CREATE INDEX IF NOT EXISTS idx_abonos_accionista ON abonos(accionista_id);
 CREATE INDEX IF NOT EXISTS idx_abonos_temporada  ON abonos(temporada_id);
-CREATE TABLE IF NOT EXISTS deudores_config (
-  accionista_id        INTEGER NOT NULL REFERENCES accionistas(id),
-  temporada_id         INTEGER NOT NULL REFERENCES temporadas(id),
-  temporadas_adeudadas INTEGER NOT NULL DEFAULT 1,
-  PRIMARY KEY (accionista_id, temporada_id)
-);
+-- There is no deudores_config. It held temporadas_adeudadas, a count of owed
+-- seasons that every formula priced at the *active* season's rate, repricing an
+-- old season at today's cuota. Migration v16 dropped it: debt from before the
+-- app is transcribed as deuda_inicial (D14), debt after it is derived from real
+-- temporadas rows at their own rates (D13, D19), and nothing was left to count.
 CREATE TABLE IF NOT EXISTS cargos (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   nombre       TEXT    NOT NULL,
@@ -142,11 +155,54 @@ function backupBeforeMigrating(database: Database.Database, dbPath: string, vers
   copyFileSync(dbPath, target)
 }
 
-function runMigrations(database: Database.Database, dbPath: string): void {
-  const version = database.pragma('user_version', { simple: true }) as number
-  if (version >= LATEST_VERSION) return
+/**
+ * Makes an older database satisfy the constraints SCHEMA is about to declare.
+ *
+ * Runs **before** `exec(SCHEMA)`, not as a migration step, because a
+ * `CREATE UNIQUE INDEX` in SCHEMA is applied to existing databases too: a
+ * duplicate would throw there, and the migration that would have cleaned it up
+ * never gets to run. The result is an app that cannot open its own database, on
+ * the one machine that has real data in it.
+ *
+ * Nothing here deletes a row or invents a number. A losing duplicate is reset to
+ * the "not recorded" value — 0 for a receipt, NULL for a socio — which keeps the
+ * payment and the member, and leaves the collision visible for the
+ * administration to re-enter from the talonario (D16, D17).
+ */
+function resolverColisionesDeUnicidad(database: Database.Database, version: number): void {
+  if (version >= 17) return
 
-  backupBeforeMigrating(database, dbPath, version)
+  const hasTable = (name: string): boolean =>
+    database
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name) !== undefined
+
+  database.transaction(() => {
+    // Lowest id keeps the number, being the first the association issued it to.
+    if (hasTable('pagos')) {
+      database.prepare(
+        `UPDATE pagos SET numero_ingreso = 0
+         WHERE numero_ingreso > 0
+           AND id NOT IN (SELECT MIN(id) FROM pagos WHERE numero_ingreso > 0 GROUP BY numero_ingreso)`
+      ).run()
+    }
+
+    if (hasTable('accionistas')) {
+      database.prepare(
+        `UPDATE accionistas SET numero_socio = NULL
+         WHERE TRIM(COALESCE(numero_socio, '')) != ''
+           AND id NOT IN (
+             SELECT MIN(id) FROM accionistas
+             WHERE TRIM(COALESCE(numero_socio, '')) != ''
+             GROUP BY TRIM(numero_socio)
+           )`
+      ).run()
+    }
+  })()
+}
+
+function runMigrations(database: Database.Database, version: number): void {
+  if (version >= LATEST_VERSION) return
 
   if (version < 1) {
     // v1: Seed propiedades from existing accionistas data (one-time migration)
@@ -471,6 +527,34 @@ function runMigrations(database: Database.Database, dbPath: string): void {
     })()
     database.pragma('user_version = 15')
   }
+
+  if (version < 16) {
+    // v16: Drop deudores_config (D19). Its only column was
+    // `temporadas_adeudadas`, a season count charged entirely at the active
+    // season's rate — the mispricing D13 exists to prevent. Nothing replaces it:
+    // pre-app debt is transcribed as deuda_inicial and later debt is derived, so
+    // the table is left with only its primary key and goes.
+    //
+    // The rows are dropped rather than converted. The count was never a figure —
+    // it says how many seasons someone was behind, not what they owed, and any
+    // amount reconstructed from it would be priced at today's cuota, which is
+    // exactly the number the administration's paper records disagree with.
+    database.transaction(() => {
+      database.prepare('DROP TABLE IF EXISTS deudores_config').run()
+    })()
+    database.pragma('user_version = 16')
+  }
+
+  if (version < 17) {
+    // v17: numero_ingreso and numero_socio become unique (D16, D17).
+    //
+    // The indexes themselves are declared in SCHEMA and were already created by
+    // the time this runs, as was the cleanup that made them possible — see
+    // `resolverColisionesDeUnicidad`, which has to happen before SCHEMA is
+    // applied rather than here. This block only records that the database has
+    // been through it.
+    database.pragma('user_version = 17')
+  }
 }
 
 export function getDbPath(): string {
@@ -489,14 +573,19 @@ export function getDb(): Database.Database {
         .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
         .get() as { n: number }).n === 0
 
-    database.exec(SCHEMA)
-
     if (isNew) {
       // SCHEMA already describes the latest shape, so the historical migrations
       // have nothing to do here — and several would fail against it.
+      database.exec(SCHEMA)
       database.pragma(`user_version = ${LATEST_VERSION}`)
     } else {
-      runMigrations(database, dbPath)
+      const version = database.pragma('user_version', { simple: true }) as number
+      if (version < LATEST_VERSION) backupBeforeMigrating(database, dbPath, version)
+      // Before SCHEMA, not after: it declares constraints an older database can
+      // still be violating, and they are applied to it as well as to a new one.
+      resolverColisionesDeUnicidad(database, version)
+      database.exec(SCHEMA)
+      runMigrations(database, version)
     }
 
     // Assigned last: if setup throws, the next call retries from scratch instead

@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../connection'
+import { roundPesos } from '../../../shared/deuda'
 import type { DeudaInicial, DeudaInicialInput } from '../../../shared/types'
 
 /**
@@ -48,7 +49,7 @@ export function registerDeudaInicialHandlers(): void {
         tipo: input.tipo,
         // Whole pesos on the way in (D8), so the stored figure and the one on
         // screen can never disagree.
-        monto: Math.round(input.monto),
+        monto: roundPesos(input.monto),
         notas: input.notas ?? null
       })
     return db.prepare('SELECT * FROM deuda_inicial WHERE id = ?').get(result.lastInsertRowid)
@@ -64,7 +65,7 @@ export function registerDeudaInicialHandlers(): void {
       id: linea.id,
       concepto: linea.concepto,
       tipo: linea.tipo,
-      monto: Math.round(linea.monto),
+      monto: roundPesos(linea.monto),
       notas: linea.notas ?? null
     })
     return db.prepare('SELECT * FROM deuda_inicial WHERE id = ?').get(linea.id)
@@ -94,7 +95,7 @@ export function registerDeudaInicialHandlers(): void {
             accionista_id: accionistaId,
             concepto: linea.concepto,
             tipo: linea.tipo,
-            monto: Math.round(linea.monto),
+            monto: roundPesos(linea.monto),
             notas: linea.notas ?? null
           })
         }

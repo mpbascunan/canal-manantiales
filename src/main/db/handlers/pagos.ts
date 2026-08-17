@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../connection'
+import { roundPesos } from '../../../shared/deuda'
 import type { PagoInput } from '../../../shared/types'
 
 const JOIN_SQL = `
@@ -54,7 +55,15 @@ export function registerPagoHandlers(): void {
 
     let pagoId: bigint | number
     db.transaction(() => {
-      const result = insertPago.run(p)
+      // Whole pesos on the way in (D8). Rounding only at display let a column of
+      // receipts add up to something other than the total printed beside them,
+      // which is the one thing the administration reconciles by hand.
+      const result = insertPago.run({
+        ...p,
+        monto_acciones: roundPesos(p.monto_acciones),
+        multas:         roundPesos(p.multas),
+        total:          roundPesos(p.total)
+      })
       pagoId = result.lastInsertRowid
       markCargosPaid.run({ accionista_id: p.accionista_id, temporada_id: p.temporada_id })
     })()

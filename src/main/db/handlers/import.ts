@@ -1,6 +1,7 @@
 import { ipcMain, dialog } from 'electron'
 import { readFileSync } from 'fs'
 import { getDb } from '../connection'
+import { roundPesos } from '../../../shared/deuda'
 import type { ImportResult, TipoDeudaInicial } from '../../../shared/types'
 
 /** One property line of the listado, as it will be written. */
@@ -36,6 +37,21 @@ export interface PropiedadSinSocio {
   fila: number
 }
 
+/**
+ * One `N° Socio` the sheet gives to two people who are not the same person.
+ *
+ * `numero_socio` identifies exactly one member (D17), and the import matches on
+ * it, so a collision would quietly fold two members into one accionista and hand
+ * one of them the other's parcelas. These groups are **rejected** rather than
+ * imported: which of the two owns the number is not something to guess at.
+ */
+export interface SocioConflicto {
+  numero_socio: string
+  /** The distinct spellings, as the sheet writes them. */
+  nombres: string[]
+  propiedades: PropiedadPreviewRow[]
+}
+
 export interface AccionistasPreview {
   /** Socio not in the database — accionista and properties both created. */
   nuevos: AccionistaPreviewGroup[]
@@ -43,6 +59,8 @@ export interface AccionistasPreview {
   actualizados: AccionistaPreviewGroup[]
   /** Skipped on import: nothing identifies who they belong to. */
   sin_socio: PropiedadSinSocio[]
+  /** Skipped on import: one N° Socio, two different people (D17). */
+  conflictos: SocioConflicto[]
 }
 
 export interface PagoPreviewRow {
@@ -244,6 +262,24 @@ export function buildDirectorio(db: ReturnType<typeof getDb>) {
 }
 
 /**
+ * Whether two spellings can be the same person.
+ *
+ * The listado writes one socio four different ways across their four rows
+ * ("ARTEMIO CORNEJO" / "ARTEMIO CORNEJO MORAGA"), so a difference is not a
+ * collision. What separates the two cases is containment: a shortened spelling
+ * uses a subset of the fuller one's words, where two different people share
+ * none of the words that matter.
+ */
+function nombresCompatibles(a: string, b: string): boolean {
+  const ta = tokens(a)
+  const tb = tokens(b)
+  if (ta.size === 0 || tb.size === 0) return true
+  const contiene = (grande: Set<string>, chico: Set<string>): boolean =>
+    [...chico].every(t => grande.has(t))
+  return contiene(ta, tb) || contiene(tb, ta)
+}
+
+/**
  * Collapses the listado's property rows into one entry per `N° Socio`.
  *
  * The socio number is the only key used: it is assigned by the association, so
@@ -251,13 +287,20 @@ export function buildDirectorio(db: ReturnType<typeof getDb>) {
  * ways across their four rows ("ARTEMIO CORNEJO" / "ARTEMIO CORNEJO MORAGA").
  * The first row's spelling names the group, and rows with no socio number are
  * handed back separately rather than guessed at.
+ *
+ * A number the sheet hands to two *different* people is a different matter: the
+ * group is pulled out as a `conflicto` and imported nowhere, since folding them
+ * together would give one member the other's parcelas (D17).
  */
 function groupBySocio(rows: any[]): {
   grupos: Map<string, AccionistaPreviewGroup>
   sin_socio: PropiedadSinSocio[]
+  conflictos: SocioConflicto[]
 } {
   const grupos = new Map<string, AccionistaPreviewGroup>()
   const sin_socio: PropiedadSinSocio[] = []
+  /** Every spelling seen for a socio, in sheet order. */
+  const nombresPorSocio = new Map<string, string[]>()
 
   for (const row of rows) {
     const socio = String(row.numero_socio ?? '').trim()
@@ -285,6 +328,10 @@ function groupBySocio(rows: any[]): {
       grupos.set(socio, grupo)
     }
 
+    const vistos = nombresPorSocio.get(socio) ?? []
+    if (!vistos.some(n => claveNombre(n) === claveNombre(nombre))) vistos.push(nombre)
+    nombresPorSocio.set(socio, vistos)
+
     const acciones = Number(row.acciones ?? 0)
     const hectareas = Number(row.hectareas ?? 0)
 
@@ -300,7 +347,23 @@ function groupBySocio(rows: any[]): {
     grupo.total_hectareas += hectareas
   }
 
-  return { grupos, sin_socio }
+  // A group is coherent when every spelling is compatible with the longest one:
+  // the fullest name is the only candidate that can contain all the others.
+  const conflictos: SocioConflicto[] = []
+  for (const [socio, nombres] of nombresPorSocio) {
+    if (nombres.length < 2) continue
+    const masLargo = nombres.reduce((a, b) => (tokens(b).size > tokens(a).size ? b : a))
+    if (nombres.every(n => nombresCompatibles(n, masLargo))) continue
+
+    conflictos.push({
+      numero_socio: socio,
+      nombres,
+      propiedades: grupos.get(socio)?.propiedades ?? []
+    })
+    grupos.delete(socio)
+  }
+
+  return { grupos, sin_socio, conflictos }
 }
 
 export function registerImportHandlers(): void {
@@ -329,7 +392,7 @@ export function registerImportHandlers(): void {
        LIMIT 1`
     )
 
-    const { grupos, sin_socio } = groupBySocio(rows)
+    const { grupos, sin_socio, conflictos } = groupBySocio(rows)
     const nuevos: AccionistaPreviewGroup[] = []
     const actualizados: AccionistaPreviewGroup[] = []
 
@@ -353,7 +416,7 @@ export function registerImportHandlers(): void {
       actualizados.push(grupo)
     }
 
-    return { nuevos, actualizados, sin_socio }
+    return { nuevos, actualizados, sin_socio, conflictos }
   })
 
   // temporadaId is part of the channel signature but unused: duplicates are
@@ -469,10 +532,20 @@ export function registerImportHandlers(): void {
        VALUES (?, ?, ?, ?, ?)`
     )
 
-    const { grupos, sin_socio } = groupBySocio(rows)
+    const { grupos, sin_socio, conflictos } = groupBySocio(rows)
     skipped = sin_socio.length
     for (const row of sin_socio) {
       errors.push(`${row.hoja} fila ${row.fila}: sin N° Socio${row.nombre ? ` ("${row.nombre}")` : ''}`)
+    }
+
+    // Rejected, not merged: the number identifies one member (D17), and picking
+    // which of the two it belongs to is the administration's call, not ours.
+    for (const c of conflictos) {
+      skipped += c.propiedades.length
+      errors.push(
+        `N° Socio ${c.numero_socio}: asignado a más de un accionista en el archivo ` +
+        `(${c.nombres.map(n => `"${n}"`).join(', ')}). No se importó; corrige el archivo.`
+      )
     }
 
     db.transaction(() => {
@@ -557,9 +630,10 @@ export function registerImportHandlers(): void {
             temporada_id: temporadaId,
             fecha: row.fecha,
             temporadas_pagadas: row.temporadas_pagadas ?? 1,
-            monto_acciones: Number(row.monto_acciones ?? 0),
-            multas: Number(row.multas ?? 0),
-            total: Number(row.total ?? 0)
+            // Whole pesos on the way in (D8), same as a pago typed by hand.
+            monto_acciones: roundPesos(Number(row.monto_acciones ?? 0)),
+            multas: roundPesos(Number(row.multas ?? 0)),
+            total: roundPesos(Number(row.total ?? 0))
           })
           imported++
         } catch (e: any) {
@@ -594,7 +668,7 @@ function registerDeudaInicialImport(): void {
         accionista_nombre: String(row.accionista_nombre ?? '').trim(),
         concepto: String(row.concepto ?? '').trim(),
         tipo: normalizarTipo(row.tipo),
-        monto: Math.round(Number(row.monto ?? 0)),
+        monto: roundPesos(Number(row.monto ?? 0)),
         fila: Number(row.fila ?? 0)
       }
 
@@ -672,7 +746,7 @@ function registerDeudaInicialImport(): void {
             accionista_id: accionistaId,
             concepto: String(linea.concepto ?? '').trim() || 'Deuda temporadas anteriores',
             tipo: normalizarTipo(linea.tipo),
-            monto: Math.round(Number(linea.monto ?? 0)),
+            monto: roundPesos(Number(linea.monto ?? 0)),
             notas: `Importado desde Excel, fila ${linea.fila}`
           })
           imported++

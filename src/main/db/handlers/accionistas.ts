@@ -26,6 +26,38 @@ const ACCIONISTA_COLS = `
 
 const SELECT_BASE = `SELECT ${ACCIONISTA_COLS} FROM accionistas a ${PROPS_AGG}`
 
+/**
+ * Rejects a `numero_socio` already taken by someone else (D17).
+ *
+ * A UNIQUE index enforces this whatever happens, but a raw SQLite constraint
+ * error tells the administrator nothing about *who* holds the number, and the
+ * renderer would only be able to show them the English of it. `excluirId` is the
+ * accionista being edited, so re-saving them is not a collision with themselves.
+ */
+function assertNumeroSocioLibre(
+  db: ReturnType<typeof getDb>,
+  numeroSocio: string | null | undefined,
+  excluirId?: number
+): void {
+  const numero = numeroSocio?.trim()
+  if (!numero) return
+
+  const duenio = db
+    .prepare(
+      `SELECT id, nombre, apellido_paterno, apellido_materno FROM accionistas
+       WHERE TRIM(COALESCE(numero_socio, '')) = ? AND id != ? LIMIT 1`
+    )
+    .get(numero, excluirId ?? -1) as
+    | { nombre: string; apellido_paterno: string | null; apellido_materno: string | null }
+    | undefined
+
+  if (duenio) {
+    const nombre = [duenio.nombre, duenio.apellido_paterno, duenio.apellido_materno]
+      .filter(Boolean).join(' ')
+    throw new Error(`El N° socio "${numero}" ya está asignado a ${nombre}`)
+  }
+}
+
 export function registerAccionistaHandlers(): void {
   ipcMain.handle('accionistas:list', (_e, includeInactive = false) => {
     const where = includeInactive ? '' : 'WHERE a.activo = 1'
@@ -43,6 +75,7 @@ export function registerAccionistaHandlers(): void {
   ipcMain.handle('accionistas:create', (_e, input: AccionistaInput) => {
     const db = getDb()
     const props = input.propiedades ?? []
+    assertNumeroSocioLibre(db, input.numero_socio)
 
     const id = db.transaction(() => {
       const r = db
@@ -75,6 +108,7 @@ export function registerAccionistaHandlers(): void {
   ipcMain.handle('accionistas:update', (_e, input: AccionistaInput & { id: number }) => {
     const db = getDb()
     const props = input.propiedades ?? []
+    assertNumeroSocioLibre(db, input.numero_socio, input.id)
 
     db.transaction(() => {
       db.prepare(
@@ -114,7 +148,6 @@ export function registerAccionistaHandlers(): void {
                   SELECT SUM(ab.total) FROM abonos ab
                   WHERE ab.accionista_id = a.id AND ab.temporada_id = ?
                 ), 0) AS total_abonado,
-                COALESCE(dc.temporadas_adeudadas, 1)  AS dc_temporadas_adeudadas,
                 CASE WHEN EXISTS(
                   SELECT 1 FROM cargo_accionistas ca
                   JOIN cargos c ON c.id = ca.cargo_id
@@ -122,9 +155,8 @@ export function registerAccionistaHandlers(): void {
                 ) THEN 1 ELSE 0 END AS has_unpaid_cargos
          FROM accionistas a
          ${PROPS_AGG}
-         LEFT JOIN deudores_config dc ON dc.accionista_id = a.id AND dc.temporada_id = ?
          WHERE a.activo = 1 ORDER BY a.nombre`
       )
-      .all(temporadaId, temporadaId, temporadaId, temporadaId)
+      .all(temporadaId, temporadaId, temporadaId)
   })
 }

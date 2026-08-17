@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/ipc'
 import { formatCLP, formatFecha, mesNombre } from '../lib/formulas'
-import { exportPagosMes, exportPagosMesPdf } from '../lib/export'
-import type { Pago, Abono } from '../../../shared/types'
+import { exportPagosMes, exportPagosMesPdf, exportPagosTemporada } from '../lib/export'
+import type { Pago, Abono, Temporada } from '../../../shared/types'
+
+/** What the table is showing: one month, or a whole temporada (README 37). */
+type Ambito = 'mes' | 'temporada'
 
 // Unified row for display — pagos and abonos merged
 interface FilaMes {
@@ -47,22 +50,40 @@ function abonoToFila(a: Abono): FilaMes {
 
 export default function PagosPorMes() {
   const now = new Date()
+  const [ambito, setAmbito] = useState<Ambito>('mes')
   const [year, setYear] = useState(now.getFullYear())
   const [month, setMonth] = useState(now.getMonth() + 1)
+  const [temporadas, setTemporadas] = useState<Temporada[]>([])
+  const [temporadaId, setTemporadaId] = useState(0)
   const [pagos, setPagos] = useState<Pago[]>([])
   const [abonos, setAbonos] = useState<Abono[]>([])
 
+  useEffect(() => {
+    api.temporadas.list().then((ts: Temporada[]) => {
+      setTemporadas(ts)
+      const activa = ts.find(t => t.activa) ?? ts[0]
+      if (activa) setTemporadaId(activa.id)
+    })
+  }, [])
+
   const load = () => {
+    if (ambito === 'temporada') {
+      if (!temporadaId) return
+      Promise.all([
+        api.pagos.listByTemporada(temporadaId),
+        api.abonos.listByTemporada(temporadaId)
+      ]).then(([ps, abs]) => { setPagos(ps); setAbonos(abs) })
+      return
+    }
     Promise.all([
       api.pagos.listByMonth(year, month),
       api.abonos.listByMonth(year, month)
-    ]).then(([ps, abs]) => {
-      setPagos(ps)
-      setAbonos(abs)
-    })
+    ]).then(([ps, abs]) => { setPagos(ps); setAbonos(abs) })
   }
 
-  useEffect(() => { load() }, [year, month])
+  useEffect(() => { load() }, [ambito, year, month, temporadaId])
+
+  const temporada = temporadas.find(t => t.id === temporadaId)
 
   const filas = useMemo<FilaMes[]>(() => {
     const merged = [
@@ -83,33 +104,79 @@ export default function PagosPorMes() {
   }), [filas])
 
   const months = Array.from({ length: 12 }, (_, i) => i + 1)
+  const porTemporada = ambito === 'temporada'
+
+  const handleExcel = () => {
+    if (porTemporada) {
+      if (temporada) exportPagosTemporada(pagos, abonos, temporada)
+    } else {
+      exportPagosMes(pagos, year, month)
+    }
+  }
 
   return (
     <div className="max-w-6xl space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Pagos por Mes</h1>
+        <h1 className="text-2xl font-bold text-gray-900">
+          {porTemporada ? 'Pagos por Temporada' : 'Pagos por Mes'}
+        </h1>
         <div className="flex gap-2">
-          <button className="btn-secondary btn-sm" onClick={() => exportPagosMes(pagos, year, month)}>
+          <button
+            className="btn-secondary btn-sm"
+            onClick={handleExcel}
+            disabled={porTemporada && !temporada}
+          >
             Exportar Excel
           </button>
-          <button className="btn-secondary btn-sm" onClick={() => exportPagosMesPdf(pagos, year, month)}>
-            Exportar PDF
-          </button>
+          {/* The PDF is the monthly ingresos sheet the administration files;
+              a whole temporada is a spreadsheet, not a sheet of paper. */}
+          {!porTemporada && (
+            <button className="btn-secondary btn-sm" onClick={() => exportPagosMesPdf(pagos, year, month)}>
+              Exportar PDF
+            </button>
+          )}
         </div>
       </div>
 
       {/* Filters */}
       <div className="flex gap-3 items-center">
-        <select className="input max-w-[150px]" value={month} onChange={e => setMonth(Number(e.target.value))}>
-          {months.map(m => <option key={m} value={m}>{mesNombre(m)}</option>)}
-        </select>
-        <input
-          type="number"
-          className="input w-24"
-          value={year}
-          onChange={e => setYear(Number(e.target.value))}
-          min={2000} max={2100}
-        />
+        <div className="flex rounded-md border border-gray-200 overflow-hidden text-sm">
+          {(['mes', 'temporada'] as Ambito[]).map(a => (
+            <button
+              key={a}
+              className={`px-3 py-1.5 transition-colors ${
+                ambito === a ? 'bg-canal-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+              }`}
+              onClick={() => setAmbito(a)}
+            >
+              {a === 'mes' ? 'Por mes' : 'Por temporada'}
+            </button>
+          ))}
+        </div>
+
+        {porTemporada ? (
+          <select
+            className="input max-w-[220px]"
+            value={temporadaId}
+            onChange={e => setTemporadaId(Number(e.target.value))}
+          >
+            {temporadas.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+          </select>
+        ) : (
+          <>
+            <select className="input max-w-[150px]" value={month} onChange={e => setMonth(Number(e.target.value))}>
+              {months.map(m => <option key={m} value={m}>{mesNombre(m)}</option>)}
+            </select>
+            <input
+              type="number"
+              className="input w-24"
+              value={year}
+              onChange={e => setYear(Number(e.target.value))}
+              min={2000} max={2100}
+            />
+          </>
+        )}
+
         <span className="text-sm text-gray-500">
           {pagos.length} pago{pagos.length !== 1 ? 's' : ''}
           {abonos.length > 0 && <>, {abonos.length} abono{abonos.length !== 1 ? 's' : ''}</>}
@@ -151,7 +218,9 @@ export default function PagosPorMes() {
               </tr>
             ))}
             {filas.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Sin movimientos en este mes</td></tr>
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">
+                {porTemporada ? 'Sin movimientos en esta temporada' : 'Sin movimientos en este mes'}
+              </td></tr>
             )}
           </tbody>
           {filas.length > 0 && (

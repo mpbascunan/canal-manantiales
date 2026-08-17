@@ -122,12 +122,6 @@ export interface AbonoInput {
   notas?: string
 }
 
-export interface DeudorConfig {
-  accionista_id: number
-  temporada_id: number
-  temporadas_adeudadas: number
-}
-
 /**
  * What a line of pre-app debt is for. `OTRO` covers anything that is neither the
  * season's fee nor a fine — a share of works, an agreed settlement — and is
@@ -163,14 +157,9 @@ export interface DeudaInicialConAccionista extends DeudaInicial {
   numero_socio: string | null
 }
 
-export interface Deudor extends Accionista {
-  temporadas_adeudadas: number
-  total_abonado: number   // SUM of abonos for this accionista+temporada
-  total_cargos: number    // SUM of cargo_accionistas.monto for this accionista+temporada
-  monto_adeudado: number
-  multas: number
-  total: number
-}
+// There is no `Deudor` shape here. A deudor is an accionista plus the
+// `DeudaPorTemporada` that `deudores:list-deuda` returns for them — every season
+// at its own rate (D13) — not a flat total keyed to a season count (D19).
 
 export interface ResumenContable {
   monto_acciones: number

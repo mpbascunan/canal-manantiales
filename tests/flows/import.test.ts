@@ -39,6 +39,39 @@ describe('importación desde Excel', () => {
       assert.equal(preview.nuevos[0].total_acciones, 4)
     })
 
+    it('still groups one socio written several ways across their rows', async () => {
+      // The listado spells the same person differently row to row. A shortened
+      // name uses a subset of the fuller one's words, so it is not a collision.
+      const preview = await invoke<AccionistasPreview>('import:preview-accionistas', [
+        filaPropiedad({ nombre: 'ARTEMIO CORNEJO' }),
+        filaPropiedad({ nombre: 'ARTEMIO CORNEJO MORAGA', nombre_propiedad: 'Parcela N°85', fila: 3 })
+      ])
+
+      assert.equal(preview.conflictos.length, 0)
+      assert.equal(preview.nuevos.length, 1)
+      assert.equal(preview.nuevos[0].propiedades.length, 2)
+    })
+
+    it('rejects a N° Socio the file gives to two different people (D17)', async () => {
+      const rows = [
+        filaPropiedad({ nombre: 'Juan Pérez' }),
+        filaPropiedad({ nombre: 'Ana Soto', nombre_propiedad: 'Sitio N°12', fila: 3 })
+      ]
+
+      const preview = await invoke<AccionistasPreview>('import:preview-accionistas', rows)
+      assert.equal(preview.nuevos.length, 0, 'the group is not offered for import')
+      assert.deepEqual(preview.conflictos.map(c => c.numero_socio), ['7'])
+      assert.deepEqual(preview.conflictos[0].nombres, ['Juan Pérez', 'Ana Soto'])
+
+      // And the import agrees: merging them would hand one member the other's
+      // parcelas, so nothing is written and the file is reported as wrong.
+      const result = await invoke<ImportResult>('import:accionistas', rows)
+      assert.equal(result.imported, 0)
+      assert.equal(result.skipped, 2)
+      assert.match(result.errors[0], /N° Socio 7/)
+      assert.deepEqual(await invoke<Accionista[]>('accionistas:list'), [])
+    })
+
     it('matches an existing accionista by N° Socio even when the name differs', async () => {
       const juan = await seedAccionista(
         'Juan Pérez', [{ nombre: 'Parcela N°84', tipo: 'PARCELA', acciones: 2, hectareas: 0 }],

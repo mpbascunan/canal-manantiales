@@ -2,9 +2,9 @@
  * The debt calculation, as decided in context.md D3, D6, D8, D13 and D14.
  *
  * Pure and dependency-free so the main process and the renderer run the *same*
- * code — the cargo and shareholder-total rules are currently written twice, once
- * in TypeScript and once in SQL (context.md G6), and this is the shape that
- * stops the multa from going the same way.
+ * code. The cargo amount used to be written twice, once in TypeScript and once
+ * as a SQL `CASE`, and the copies could drift (context.md G6); `calcularMontoCargo`
+ * below is now the only one, and the multa never had a second copy to begin with.
  *
  * The rules that drive everything here:
  *
@@ -127,6 +127,25 @@ export interface DeudaPorTemporada {
 /** CLP has no minor unit, so every money value is a whole peso (D8). */
 export function roundPesos(value: number): number {
   return Math.round(value)
+}
+
+/** How a cargo prices one shareholder: a flat tarifa, or tarifa × unidades. */
+export type TipoTarifa = 'proporcional' | 'fija'
+
+/**
+ * What one accionista owes for a cargo, in whole pesos (D8).
+ *
+ * The only copy of the rule. It used to be written once in TypeScript, when a
+ * cargo was created, and again as a SQL `CASE` in three separate queries, so
+ * editing one left the others quietly disagreeing (context.md G6). `unidades`
+ * is `acciones + hectareas`, and is ignored by a `fija` tarifa.
+ */
+export function calcularMontoCargo(
+  tipoTarifa: TipoTarifa | string,
+  tarifa: number,
+  unidades: number
+): number {
+  return roundPesos(tipoTarifa === 'fija' ? tarifa : tarifa * unidades)
 }
 
 /** ISO `YYYY-MM-DD` strings compare correctly as strings. */

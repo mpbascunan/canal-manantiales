@@ -120,9 +120,15 @@ export const EMPTY_ACCIONISTA_FORM: AccionistaEditForm = {
   propiedades: [BLANK_PROPIEDAD]
 }
 
-export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
+export function AccionistaModal({
+  value, isNew, numerosSocioEnUso, error, onChange, onSave, onClose
+}: {
   value: AccionistaEditForm
   isNew: boolean
+  /** N° socio already held by someone else — this accionista's own excluded. */
+  numerosSocioEnUso?: Set<string>
+  /** Whatever the save rejected with, in Spanish, for the user to act on. */
+  error?: string | null
   onChange: (f: AccionistaEditForm) => void
   onSave: () => void
   onClose: () => void
@@ -131,6 +137,14 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
 
   // RUT is optional, but if entered it must pass the módulo 11 check.
   const rutIsValid = value.rut.trim() === '' || isValidRut(value.rut)
+
+  // N° socio identifies exactly one member (D17). Checked here so the
+  // administrator is told while typing, and again in the database, which is what
+  // makes the invariant hold. Blank is allowed: not every record carries one.
+  const numeroSocio = value.numero_socio.trim()
+  const numeroSocioLibre = numeroSocio === '' || !numerosSocioEnUso?.has(numeroSocio)
+
+  const puedeGuardar = rutIsValid && numeroSocioLibre
 
   const setPropiedad = (i: number, patch: Partial<PropiedadInput>) => {
     const props = value.propiedades.map((p, j) => j === i ? { ...p, ...patch } : p)
@@ -187,7 +201,16 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
             </div>
             <div>
               <label className="label">Número socio</label>
-              <input className="input" value={value.numero_socio} onChange={e => set({ numero_socio: e.target.value })} placeholder="Ej: 042" />
+              <input
+                className={`input ${numeroSocioLibre ? '' : 'border-red-400 focus:ring-red-400'}`}
+                value={value.numero_socio}
+                onChange={e => set({ numero_socio: e.target.value })}
+                placeholder="Ej: 042"
+                aria-invalid={!numeroSocioLibre}
+              />
+              {!numeroSocioLibre && (
+                <p className="text-xs text-red-500 mt-0.5">Ese N° socio ya está en uso</p>
+              )}
             </div>
           </div>
 
@@ -302,13 +325,23 @@ export function AccionistaModal({ value, isNew, onChange, onSave, onClose }: {
           </div>
         </div>
 
+        {error && (
+          <p className="mt-4 rounded-md bg-red-50 border border-red-300 px-3 py-2 text-sm text-red-800">
+            {error}
+          </p>
+        )}
+
         <div className="flex justify-end gap-2 mt-5">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
           <button
             className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={onSave}
-            disabled={!rutIsValid}
-            title={rutIsValid ? undefined : 'Corrige el RUT para guardar'}
+            disabled={!puedeGuardar}
+            title={
+              rutIsValid
+                ? (numeroSocioLibre ? undefined : 'Ese N° socio ya está en uso')
+                : 'Corrige el RUT para guardar'
+            }
           >
             Guardar
           </button>

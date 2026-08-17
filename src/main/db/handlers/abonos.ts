@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../connection'
+import { roundPesos } from '../../../shared/deuda'
 import type { AbonoInput } from '../../../shared/types'
 
 export function registerAbonoHandlers(): void {
@@ -19,9 +20,11 @@ export function registerAbonoHandlers(): void {
         accionista_id:  input.accionista_id,
         temporada_id:   input.temporada_id,
         fecha:          input.fecha,
-        monto:          input.monto,
-        multas:         input.multas,
-        total:          input.total,
+        // Whole pesos on the way in (D8): an abono is drawn down against debts
+        // that are themselves rounded, so a fraction here would never clear.
+        monto:          roundPesos(input.monto),
+        multas:         roundPesos(input.multas),
+        total:          roundPesos(input.total),
         notas:          input.notas ?? null
       })
 
@@ -57,6 +60,20 @@ export function registerAbonoHandlers(): void {
          ORDER BY ab.fecha DESC, ab.id DESC`
       )
       .all(accionistaId)
+  })
+
+  /** Every abono of one temporada — the other half of its ingresos (README 37). */
+  ipcMain.handle('abonos:list-by-temporada', (_e, temporadaId: number) => {
+    return getDb()
+      .prepare(
+        `SELECT ab.*, a.nombre AS accionista_nombre, t.nombre AS temporada_nombre
+         FROM abonos ab
+         JOIN accionistas a ON a.id = ab.accionista_id
+         JOIN temporadas t  ON t.id = ab.temporada_id
+         WHERE ab.temporada_id = ?
+         ORDER BY ab.fecha, ab.numero_ingreso`
+      )
+      .all(temporadaId)
   })
 
   ipcMain.handle('abonos:list-by-month', (_e, year: number, month: number) => {

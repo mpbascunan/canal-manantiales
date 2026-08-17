@@ -41,14 +41,11 @@ const api = {
     create: (a: any) => ipcRenderer.invoke('abonos:create', a),
     delete: (id: number) => ipcRenderer.invoke('abonos:delete', id),
     listByAccionista: (id: number) => ipcRenderer.invoke('abonos:list-by-accionista', id),
+    listByTemporada: (id: number) => ipcRenderer.invoke('abonos:list-by-temporada', id),
     listByMonth: (year: number, month: number) => ipcRenderer.invoke('abonos:list-by-month', year, month)
   },
   // Deudores
   deudores: {
-    list: (temporadaId: number) => ipcRenderer.invoke('deudores:list', temporadaId),
-    getConfig: (accionistaId: number, temporadaId: number) =>
-      ipcRenderer.invoke('deudores:get-config', accionistaId, temporadaId),
-    upsertConfig: (cfg: any) => ipcRenderer.invoke('deudores:upsert-config', cfg),
     getDeuda: (accionistaId: number, hoy?: string) =>
       ipcRenderer.invoke('deudores:get-deuda', accionistaId, hoy),
     listDeuda: (hoy?: string, incluirSinDeuda?: boolean) =>

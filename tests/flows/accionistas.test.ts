@@ -22,6 +22,51 @@ describe('accionistas y propiedades', () => {
     assert.deepEqual(created.nombres_propiedades!.split(', ').sort(), ['Parcela N°84', 'Sitio N°47-A'])
   })
 
+  describe('N° socio (D17)', () => {
+    it('refuses a number another accionista already holds', async () => {
+      await seedAccionista('Juan', undefined, { numero_socio: '7' })
+
+      await assert.rejects(
+        () => seedAccionista('Ana', undefined, { numero_socio: '7' }),
+        // Named, because "ya está en uso" is no help when 396 members exist.
+        /ya está asignado a Juan/
+      )
+    })
+
+    it('compares trimmed, the same way the database index does', async () => {
+      await seedAccionista('Juan', undefined, { numero_socio: '7' })
+      await assert.rejects(() => seedAccionista('Ana', undefined, { numero_socio: '  7 ' }))
+    })
+
+    it('lets an accionista keep their own number when edited', async () => {
+      const juan = await seedAccionista('Juan', [], { numero_socio: '7' })
+
+      const updated = await invoke<Accionista>('accionistas:update', {
+        id: juan.id, nombre: 'Juan Carlos', numero_socio: '7', activo: true, propiedades: []
+      })
+      assert.equal(updated.numero_socio, '7')
+    })
+
+    it('refuses to move a number onto someone who is not its holder', async () => {
+      await seedAccionista('Juan', [], { numero_socio: '7' })
+      const ana = await seedAccionista('Ana', [], { numero_socio: '8' })
+
+      await assert.rejects(() => invoke('accionistas:update', {
+        id: ana.id, nombre: 'Ana', numero_socio: '7', activo: true, propiedades: []
+      }), /ya está asignado a Juan/)
+    })
+
+    it('allows any number of accionistas with no number on file', async () => {
+      // Many historical records carry none; blank is a state, not an identity.
+      await seedAccionista('Sin Uno', [], { numero_socio: null })
+      await seedAccionista('Sin Dos', [], { numero_socio: '' })
+      await seedAccionista('Sin Tres', [])
+
+      const todos = await invoke<Accionista[]>('accionistas:list')
+      assert.equal(todos.length, 3)
+    })
+  })
+
   it('reports zeros for an accionista with no propiedades', async () => {
     const created = await seedAccionista('Sin Propiedades', [])
 
@@ -107,6 +152,8 @@ describe('accionistas y propiedades', () => {
     assert.equal(byName.Moroso.pago_temporada_activa, 0)
     assert.equal(byName.Moroso.total_abonado, 5_000)
     assert.equal(byName.Moroso.has_unpaid_cargos, 1)
-    assert.equal(byName.Moroso.dc_temporadas_adeudadas, 1)
+    // No debt figure here any more: `temporadas_adeudadas` was dropped with D19,
+    // and how much someone owes comes from `deudores:list-deuda`.
+    assert.equal('dc_temporadas_adeudadas' in byName.Moroso, false)
   })
 })

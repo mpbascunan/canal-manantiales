@@ -1,7 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../connection'
-import type { DeudorConfig } from '../../../shared/types'
-import { calcularDeudaPorTemporada } from '../../../shared/deuda'
+import { calcularDeudaPorTemporada, calcularMontoCargo } from '../../../shared/deuda'
 import type {
   AbonoAplicable, CargoDeuda, DeudaInicialLinea, TemporadaDeuda
 } from '../../../shared/deuda'
@@ -29,8 +28,8 @@ function today(): string {
  * The full debt of one accionista, across every temporada (D13).
  *
  * Assembles the rows and hands them to the shared engine rather than expressing
- * the rules in SQL again — the cargo amount formula already exists twice and the
- * copies can drift (context.md G6).
+ * the rules in SQL again: the cargo amount has exactly one implementation,
+ * `calcularMontoCargo` (context.md G6).
  */
 function computeDeuda(accionistaId: number, hoy: string) {
   const db = getDb()
@@ -65,20 +64,20 @@ function computeDeuda(accionistaId: number, hoy: string) {
     )
     .all(accionistaId) as DeudaInicialLinea[]
 
-  // The cargo amount rule, resolved here so the engine only ever sees a figure:
-  // 'fija' is a flat tarifa, anything else is tarifa × unidades.
+  // The cargo amount is resolved here, by the shared rule, so the engine only
+  // ever sees a figure — and so this is not a second copy of the formula (G6).
   const cargos = db
     .prepare(
       `SELECT ca.cargo_id AS id, c.temporada_id, c.nombre,
-              CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
-                   ELSE c.tarifa * ? END AS monto,
-              ca.pagado
+              c.tarifa, c.tipo_tarifa, ca.pagado
        FROM cargo_accionistas ca
        JOIN cargos c ON c.id = ca.cargo_id
        WHERE ca.accionista_id = ?
        ORDER BY ca.cargo_id`
     )
-    .all(unidades, accionistaId) as (Omit<CargoDeuda, 'pagado'> & { pagado: number })[]
+    .all(accionistaId) as (Omit<CargoDeuda, 'pagado' | 'monto'> & {
+      tarifa: number; tipo_tarifa: string; pagado: number
+    })[]
 
   return calcularDeudaPorTemporada(
     temporadas.map(t => ({ ...t, pagada: t.pagada === 1 })),
@@ -86,126 +85,30 @@ function computeDeuda(accionistaId: number, hoy: string) {
     unidades,
     hoy,
     deudaInicial,
-    cargos.map(c => ({ ...c, pagado: c.pagado === 1 }))
+    cargos.map(c => ({
+      ...c,
+      monto: calcularMontoCargo(c.tipo_tarifa, c.tarifa, unidades),
+      pagado: c.pagado === 1
+    }))
   )
 }
 
+/**
+ * Every channel here answers from `calcularDeudaPorTemporada`.
+ *
+ * There used to be three more — `deudores:list`, `:get-config` and
+ * `:upsert-config` — built on `deudores_config.temporadas_adeudadas`: a count of
+ * owed seasons, priced entirely at the *active* season's rate. D19 removed it,
+ * and with it the last path that could put a different debt on screen than the
+ * one the engine computes. Pre-app debt is `deuda_inicial` (D14); everything
+ * after it derives from real `temporadas` rows at their own rates (D13).
+ */
 export function registerDeudorHandlers(): void {
-  ipcMain.handle('deudores:list', (_e, temporadaId: number) => {
-    return getDb()
-      .prepare(
-        `SELECT a.id, a.nombre, a.activo, a.notas,
-                COALESCE(pt.total_acciones, 0)            AS acciones,
-                COALESCE(pt.total_hectareas, 0)           AS hectareas,
-                pt.nombres_propiedades                    AS nombres_propiedades,
-                COALESCE(dc.temporadas_adeudadas, 1)      AS temporadas_adeudadas,
-                COALESCE(abn.total_abonado, 0)            AS total_abonado,
-                COALESCE(cg.total_cargos, 0)              AS total_cargos,
-                COALESCE(cg.total_cargos_pagados, 0)      AS total_cargos_pagados,
-                CASE WHEN EXISTS(
-                  SELECT 1 FROM pagos p WHERE p.accionista_id = a.id AND p.temporada_id = ?
-                ) THEN 1 ELSE 0 END AS has_full_payment
-         FROM accionistas a
-         ${PROPS_AGG}
-         LEFT JOIN deudores_config dc
-               ON dc.accionista_id = a.id AND dc.temporada_id = ?
-         LEFT JOIN (
-               SELECT accionista_id, SUM(total) AS total_abonado
-               FROM abonos
-               WHERE temporada_id = ?
-               GROUP BY accionista_id
-         ) abn ON abn.accionista_id = a.id
-         LEFT JOIN (
-               SELECT ca.accionista_id,
-                      SUM(CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
-                               ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
-                          END) AS total_cargos,
-                      SUM(CASE WHEN ca.pagado = 1 THEN
-                               CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
-                                    ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
-                               END
-                          ELSE 0 END) AS total_cargos_pagados
-               FROM cargo_accionistas ca
-               JOIN cargos c ON c.id = ca.cargo_id
-               LEFT JOIN (
-                 SELECT accionista_id,
-                        SUM(acciones)  AS total_acciones,
-                        SUM(hectareas) AS total_hectareas
-                 FROM propiedades GROUP BY accionista_id
-               ) pt ON pt.accionista_id = ca.accionista_id
-               WHERE c.temporada_id = ?
-               GROUP BY ca.accionista_id
-         ) cg ON cg.accionista_id = a.id
-         WHERE a.activo = 1
-           AND (
-             NOT EXISTS (
-               SELECT 1 FROM pagos p
-               WHERE p.accionista_id = a.id AND p.temporada_id = ?
-             )
-             OR EXISTS (
-               SELECT 1 FROM cargo_accionistas ca
-               JOIN cargos c ON c.id = ca.cargo_id
-               WHERE ca.accionista_id = a.id AND c.temporada_id = ? AND ca.pagado = 0
-             )
-           )
-         ORDER BY a.nombre`
-      )
-      .all(temporadaId, temporadaId, temporadaId, temporadaId, temporadaId, temporadaId)
-  })
-
-  ipcMain.handle('deudores:get-config', (_e, accionistaId: number, temporadaId: number) => {
-    const db = getDb()
-    const config = db
-      .prepare('SELECT * FROM deudores_config WHERE accionista_id = ? AND temporada_id = ?')
-      .get(accionistaId, temporadaId) as DeudorConfig | undefined
-
-    const abonado = db
-      .prepare(
-        `SELECT COALESCE(SUM(total), 0) AS total_abonado
-         FROM abonos WHERE accionista_id = ? AND temporada_id = ?`
-      )
-      .get(accionistaId, temporadaId) as { total_abonado: number }
-
-    const cargos = db
-      .prepare(
-        `SELECT
-           COALESCE(SUM(
-             CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
-                  ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
-             END
-           ), 0) AS total_cargos,
-           COALESCE(SUM(CASE WHEN ca.pagado = 1 THEN
-             CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
-                  ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
-             END
-           ELSE 0 END), 0) AS total_cargos_pagados
-         FROM cargo_accionistas ca
-         JOIN cargos c ON c.id = ca.cargo_id
-         LEFT JOIN (
-           SELECT accionista_id,
-                  SUM(acciones)  AS total_acciones,
-                  SUM(hectareas) AS total_hectareas
-           FROM propiedades
-           GROUP BY accionista_id
-         ) pt ON pt.accionista_id = ca.accionista_id
-         WHERE ca.accionista_id = ? AND c.temporada_id = ?`
-      )
-      .get(accionistaId, temporadaId) as { total_cargos: number; total_cargos_pagados: number }
-
-    return {
-      temporadas_adeudadas:  config?.temporadas_adeudadas ?? 1,
-      total_abonado:         abonado.total_abonado,
-      total_cargos:          cargos.total_cargos,
-      total_cargos_pagados:  cargos.total_cargos_pagados
-    }
-  })
-
   /**
    * The full debt of one accionista, across every temporada (D13).
    *
    * Assembles the rows and hands them to the shared engine rather than
-   * expressing the rules in SQL again — the cargo amount formula already exists
-   * twice and the copies can drift (context.md G6).
+   * expressing the rules in SQL again (context.md G6).
    *
    * `hoy` is a parameter so the caller can reproduce a past state; it defaults
    * to today.
@@ -219,7 +122,7 @@ export function registerDeudorHandlers(): void {
    *
    * One call per accionista rather than a single clever query: better-sqlite3 is
    * synchronous and in-process, and one shared code path that is right beats two
-   * that can disagree (context.md G6).
+   * that can disagree.
    *
    * `incluirSinDeuda` keeps the settled shareholders in the result — the avisos
    * de cobro for "todos los accionistas" need a sheet for every one of them.
@@ -245,18 +148,5 @@ export function registerDeudorHandlers(): void {
     return accionistas
       .map(a => ({ ...a, deuda: computeDeuda(a.id as number, fecha) }))
       .filter(row => incluirSinDeuda || row.deuda.total_pendiente > 0)
-  })
-
-  ipcMain.handle('deudores:upsert-config', (_e, cfg: DeudorConfig) => {
-    getDb()
-      .prepare(
-        `INSERT INTO deudores_config
-           (accionista_id, temporada_id, temporadas_adeudadas)
-         VALUES
-           (@accionista_id, @temporada_id, @temporadas_adeudadas)
-         ON CONFLICT(accionista_id, temporada_id) DO UPDATE SET
-           temporadas_adeudadas = excluded.temporadas_adeudadas`
-      )
-      .run(cfg)
   })
 }

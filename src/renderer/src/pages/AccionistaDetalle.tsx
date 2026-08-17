@@ -27,6 +27,7 @@ export default function AccionistaDetalle() {
   const [temporada, setTemporada] = useState<Temporada | null>(null)
   const [cargos, setCargos] = useState<(Cargo & { monto: number; pagado: number })[]>([])
   const [editForm, setEditForm] = useState<AccionistaEditForm | null>(null)
+  const [editError, setEditError] = useState<string | null>(null)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
   const [deudaCompleta, setDeudaCompleta] = useState<DeudaPorTemporada | null>(null)
 
@@ -74,18 +75,25 @@ export default function AccionistaDetalle() {
 
   const saveEdit = async () => {
     if (!editForm) return
-    await api.accionistas.update({
-      id: editForm.id!, nombre: editForm.nombre,
-      apellido_paterno: editForm.apellido_paterno || null,
-      apellido_materno: editForm.apellido_materno || null,
-      rut: editForm.rut || null,
-      numero_socio: editForm.numero_socio || null,
-      activo: editForm.activo, notas: editForm.notas || null,
-      propiedades: editForm.propiedades.map(p => ({
-        ...p, nombre: p.nombre || null, direccion: p.direccion || null,
-        marco: p.marco || null
-      }))
-    })
+    try {
+      await api.accionistas.update({
+        id: editForm.id!, nombre: editForm.nombre,
+        apellido_paterno: editForm.apellido_paterno || null,
+        apellido_materno: editForm.apellido_materno || null,
+        rut: editForm.rut || null,
+        numero_socio: editForm.numero_socio || null,
+        activo: editForm.activo, notas: editForm.notas || null,
+        propiedades: editForm.propiedades.map(p => ({
+          ...p, nombre: p.nombre || null, direccion: p.direccion || null,
+          marco: p.marco || null
+        }))
+      })
+    } catch (e: any) {
+      // A N° socio taken by someone else (D17) comes back as a rejection.
+      setEditError(String(e?.message ?? e).replace(/^Error invoking remote method '[^']*':\s*/, ''))
+      return
+    }
+    setEditError(null)
     setEditForm(null)
     reload()
   }
@@ -352,9 +360,10 @@ export default function AccionistaDetalle() {
         <AccionistaModal
           value={editForm}
           isNew={false}
-          onChange={setEditForm}
+          error={editError}
+          onChange={f => { setEditError(null); setEditForm(f) }}
           onSave={saveEdit}
-          onClose={() => setEditForm(null)}
+          onClose={() => { setEditError(null); setEditForm(null) }}
         />
       )}
 

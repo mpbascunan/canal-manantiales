@@ -2,6 +2,8 @@
 
 Este documento describe en detalle la lógica de negocio, los modelos de base de datos, las relaciones entre entidades y las fórmulas de cálculo utilizadas en la aplicación. Está pensado para quien no tiene conocimiento previo del código fuente.
 
+> **Cómo leer este documento.** Aquí se describe **lo que el sistema hace hoy**. Las reglas de negocio y el porqué de cada decisión están en `context.md`, que es el documento que manda: si `context.md` y este archivo se contradicen, `context.md` tiene la razón y esto está desactualizado. Las secciones marcadas con **⚠ Pendiente** describen una regla ya decidida que el código todavía no implementa.
+
 ---
 
 ## Índice
@@ -12,27 +14,32 @@ Este documento describe en detalle la lógica de negocio, los modelos de base de
 4. [Relaciones entre Entidades](#4-relaciones-entre-entidades)
 5. [Fórmulas y Cálculos](#5-fórmulas-y-cálculos)
 6. [Flujo de Pagos](#6-flujo-de-pagos)
-7. [Abonos: qué son y cómo funcionan](#7-abonos-qué-son-y-cómo-funcionan)
-8. [Deudores y Configuración de Deuda](#8-deudores-y-configuración-de-deuda)
-9. [Cargos](#9-cargos)
-10. [Multas](#10-multas)
-11. [Número de Ingreso](#11-número-de-ingreso)
-12. [Temporadas](#12-temporadas)
-13. [Resumen Contable](#13-resumen-contable)
-14. [Avisos de Cobranza](#14-avisos-de-cobranza)
+7. [Abonos: qué son y cómo se reparten](#7-abonos-qué-son-y-cómo-se-reparten)
+8. [Deuda Inicial (deuda anterior al sistema)](#8-deuda-inicial-deuda-anterior-al-sistema)
+9. [Deudores](#9-deudores)
+10. [Cargos](#10-cargos)
+11. [Multas](#11-multas)
+12. [Número de Ingreso](#12-número-de-ingreso)
+13. [Temporadas](#13-temporadas)
+14. [Resumen Contable](#14-resumen-contable)
+15. [Avisos de Cobranza](#15-avisos-de-cobranza)
 
 ---
 
 ## 1. Propósito de la Aplicación
 
-La aplicación gestiona la **contabilidad de cobros de agua** de la Sociedad de Canal Rinconada de Manantiales. Cada temporada agrícola (por ejemplo, "Temporada 2024-2025") los accionistas deben pagar una cuota proporcional a su participación en el canal, medida en **acciones** y **hectáreas**.
+La aplicación gestiona la **contabilidad de cobros de agua** de la Sociedad de Canal Rinconada de Manantiales. Cada temporada agrícola (por ejemplo, "Temporada 2025-2026") los accionistas deben pagar una cuota proporcional a su participación en el canal, medida en **acciones** y **hectáreas**.
 
 La aplicación permite:
+
 - Registrar y consultar los pagos de cada temporada.
-- Hacer seguimiento de quiénes adeudan (deudores).
+- Hacer seguimiento de quiénes adeudan (deudores), incluyendo temporadas anteriores.
 - Registrar pagos parciales (abonos) y cobros adicionales (cargos).
-- Calcular multas por temporadas adeudadas.
-- Exportar resúmenes contables e informes en Excel y PDF.
+- Calcular automáticamente la multa por atraso de cada temporada.
+- Registrar la deuda que venía de antes de que existiera el sistema.
+- Imprimir avisos de cobranza y comprobantes, y exportar resúmenes contables en Excel y PDF.
+
+Es una aplicación de escritorio de **un solo usuario**, sin servidor y sin red. Los datos viven en un único archivo SQLite en el computador de la administración y no salen de ahí; por eso el respaldo es una función de primera clase.
 
 ---
 
@@ -40,140 +47,165 @@ La aplicación permite:
 
 | Término | Significado |
 |---------|-------------|
-| **Accionista** | Persona o entidad propietaria de derechos de agua en el canal. Tiene una o más propiedades asociadas. |
-| **Propiedad** | Una parcela, sitio o terreno con una cantidad específica de acciones y hectáreas. Un accionista puede tener varias propiedades. |
-| **Acciones** | Unidad de medida de derechos de agua. Junto con las hectáreas, determinan el monto a pagar. |
-| **Hectáreas** | Segunda unidad de medida que complementa las acciones para calcular el pago. |
-| **Temporada** | Período agrícola (ej. "2024-2025"). Cada temporada tiene un `valor_accion` que determina el precio base del cobro. |
-| **Pago** | Cancelación completa de la deuda de un accionista para una temporada. Un accionista solo puede tener un pago por temporada. |
-| **Abono** | Pago parcial que reduce la deuda pero no la cancela por completo. Se pueden registrar múltiples abonos por accionista y temporada. |
-| **Multa** | Penalización por temporadas adeudadas (no pagadas a tiempo). Se calcula automáticamente. |
-| **Cuota Extraordinaria** | Cobro adicional puntual, distinto a la cuota base y a los cargos. Se define por deudor en la configuración de deuda. |
-| **Cargo** | Cobro extra con nombre libre (ej. "Limpieza", "Mantención canal") asociado a uno o más accionistas para una temporada. |
-| **Deudor** | Accionista activo que no ha realizado el pago completo de la temporada activa. |
-| **N° Ingreso** | Número de comprobante único y secuencial para cada pago o abono registrado. |
+| **Accionista** | Persona o entidad propietaria de derechos de agua en el canal. Tiene una o más propiedades asociadas. Se identifica por su **N° de socio**. |
+| **Propiedad** | Una parcela, sitio o terreno de pequeño propietario, con su cantidad de acciones y hectáreas. Un accionista puede tener varias. |
+| **Acciones** | Unidad de medida de derechos de agua. |
+| **Hectáreas** | Segunda unidad de medida. **Se cobra exactamente igual que una acción.** |
+| **Unidades** | No es un campo: es la cantidad derivada `acciones + hectáreas`. Todas las fórmulas de dinero se calculan por unidad. |
+| **Temporada** | Período agrícola (ej. "2025-2026", de marzo a fines de febrero). Cada temporada tiene su propio `valor_accion`, su propia fecha límite de pago y su propio valor de multa. Solo una está activa. |
+| **Cuota** | Lo que un accionista debe por una temporada: `valor_accion × unidades`. |
+| **Pago** | Cancelación **completa** de una temporada. Un accionista tiene como máximo un pago por temporada. |
+| **Abono** | Pago parcial. No cierra la temporada; se reparte automáticamente sobre lo que se debe. |
+| **Cargo** | Cobro extra con nombre libre (limpia de acequia, cuota extraordinaria, multa por inasistencia…), dirigido a accionistas específicos de una temporada. |
+| **Multa por atraso** | Penalización por pagar una temporada fuera de plazo. Se calcula sola a partir de la fecha límite de la temporada; nunca se emite a mano. |
+| **Multa por inasistencia** | Pese al nombre, **es un cargo**: se emite a mano a accionistas determinados por faltar a una reunión o votación. No sigue las reglas de la multa por atraso. |
+| **Deuda inicial** | Deuda anterior al sistema, transcrita desde los registros en papel de la administración. No se recalcula nunca. |
+| **Deudor** | Accionista activo que no tiene pago para la temporada, **o** que tiene cualquier cargo impago. Un cargo nuevo reabre una cuenta que ya estaba saldada. |
+| **N° Ingreso** | Número del talonario físico de recibos, escrito a mano al momento de pagar. Identifica un pago; es único. |
+| **Respaldo** | Copia de seguridad de la base de datos hecha por el usuario. |
 
 ---
 
 ## 3. Modelos de Base de Datos
 
-### 3.1 Tabla `temporadas`
+El esquema autoritativo es la constante `SCHEMA` en `src/main/db/connection.ts`. No existe ninguna otra copia: un espejo `schema.sql` existió, se desincronizó en silencio durante once migraciones, y se eliminó.
 
-Representa cada período agrícola.
+### 3.1 Tabla `temporadas`
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `id` | INTEGER PK | Identificador único |
-| `nombre` | TEXT UNIQUE | Nombre de la temporada (ej. "2024-2025") |
-| `fecha_inicio` | TEXT | Fecha de inicio (formato ISO: YYYY-MM-DD) |
+| `nombre` | TEXT UNIQUE | Nombre de la temporada (ej. "2025-2026") |
+| `fecha_inicio` | TEXT | Fecha de inicio (ISO `YYYY-MM-DD`) |
 | `fecha_fin` | TEXT | Fecha de término |
-| `valor_accion` | REAL | Precio base por unidad (acción o hectárea). Se usa en todas las fórmulas de cobro. |
-| `activa` | INTEGER (0/1) | Solo una temporada puede estar activa a la vez. Es la que aparece por defecto en formularios. |
-| `nota_aviso` | TEXT | Mensaje opcional que aparece como advertencia al registrar pagos. |
+| `valor_accion` | REAL | Precio por unidad (acción u hectárea) **de esta temporada** |
+| `activa` | INTEGER (0/1) | Solo una temporada puede estar activa a la vez |
+| `nota_aviso` | TEXT | Mensaje opcional que se imprime en el aviso de cobranza |
+| `fecha_multa` | DATE NULL | Fecha límite de pago. Si es `NULL`, esta temporada **nunca** genera multa |
+| `monto_multa_por_accion` | REAL | Valor de la multa por unidad **de esta temporada** |
+
+> Cada temporada guarda sus propios valores. Una temporada antigua se cobra al precio que tenía entonces, no al de hoy.
 
 ### 3.2 Tabla `accionistas`
 
-Representa a cada titular de derechos de agua.
-
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `id` | INTEGER PK | Identificador único |
-| `nombre` | TEXT NOT NULL | Nombre del accionista |
+| `nombre` | TEXT NOT NULL | Nombres |
 | `apellido_paterno` | TEXT | Apellido paterno |
 | `apellido_materno` | TEXT | Apellido materno |
-| `rut` | TEXT | RUT, validado con módulo 11 si se ingresa |
-| `numero_socio` | TEXT | N° de socio asignado por la asociación; identifica al accionista en la importación del listado |
-| `activo` | INTEGER (0/1) | Si está inactivo, no aparece en la lista de deudores ni en formularios |
+| `rut` | TEXT | RUT. Opcional, pero si se ingresa se valida con módulo 11. Es dato descriptivo: no identifica ni se usa para cruzar datos |
+| `numero_socio` | TEXT | N° de socio de la asociación. Es **el** identificador del accionista y con él se cruzan las importaciones. **Único**: lo garantiza el índice parcial `idx_accionistas_numero_socio`, que ignora los registros sin número. El formulario y el importador también lo revisan (`context.md` D17) |
+| `activo` | INTEGER (0/1) | Si está inactivo no aparece en deudores ni en formularios |
 | `notas` | TEXT | Observaciones libres |
 
 > **Nota:** `accionistas` no guarda acciones ni hectáreas. Los totales siempre se suman desde `propiedades`.
 
 ### 3.3 Tabla `propiedades`
 
-Cada fila es una propiedad individual de un accionista. Un accionista puede tener varias propiedades con distintos tipos y cantidades.
-
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `id` | INTEGER PK | Identificador único |
-| `accionista_id` | INTEGER FK | Referencia al accionista dueño |
-| `nombre` | TEXT | Nombre de la propiedad tal como aparece en el listado (ej. "Parcela N°8 Lote A-2") |
-| `tipo` | TEXT | `PARCELA`, `SITIO`, o `PEQUEÑO_PROPIETARIO` |
-| `acciones` | REAL | Acciones de esta propiedad específica |
-| `hectareas` | REAL | Hectáreas de esta propiedad específica |
+| `accionista_id` | INTEGER FK | Accionista dueño (borrado en cascada) |
+| `nombre` | TEXT | Nombre tal como aparece en el listado de la administración (ej. "Parcela N°8 Lote A-2") |
+| `tipo` | TEXT | `PARCELA`, `SITIO` o `PEQUEÑO_PROPIETARIO` |
+| `acciones` | REAL | Acciones de esta propiedad |
+| `hectareas` | REAL | Hectáreas de esta propiedad |
+| `direccion` | TEXT | Rinconada de Manantiales, La Tuna, Las Canchillas |
+| `marco` | TEXT | Canal principal, El Cerrillo, Cerro al Peñón, El Durazno, La Luquita, Los Ortices, Plaza Manantiales, Ramal 1 |
 
-El sistema suma automáticamente las acciones y hectáreas de todas las propiedades del accionista para aplicar las fórmulas de cobro.
+La propiedad se identifica por su **nombre**, no por un número: el listado de la administración la nombra así y así se imprime en el aviso.
 
 ### 3.4 Tabla `pagos`
 
-Cada fila representa un pago completo que cancela la deuda de un accionista para una temporada.
+Cada fila es un pago que **cancela por completo** una temporada para un accionista.
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `id` | INTEGER PK | Identificador único |
-| `numero_ingreso` | INTEGER | N° de comprobante (secuencia compartida con abonos) |
+| `numero_ingreso` | INTEGER | N° del talonario físico. **Único**: lo garantiza el índice parcial `idx_pagos_numero_ingreso`, que solo cubre los valores mayores que 0. El 0 significa "sin número registrado" y puede repetirse (`context.md` D16) |
 | `accionista_id` | INTEGER FK | Accionista que paga |
-| `temporada_id` | INTEGER FK | Temporada a la que corresponde el pago |
+| `temporada_id` | INTEGER FK | Temporada que se cancela |
 | `fecha` | TEXT | Fecha del pago |
-| `temporadas_pagadas` | INTEGER | Cuántas temporadas cubre este pago (puede ser más de una si hay deuda acumulada) |
-| `monto_acciones` | REAL | Monto calculado por acciones y hectáreas |
-| `multas` | REAL | Multas incluidas en este pago |
-| `cuota_extraordinaria` | REAL | Cobro adicional particular |
-| `otros_ingresos` | REAL | Otros montos cobrados |
-| `total` | REAL | Suma de todos los campos anteriores, descontando abonos ya realizados |
-| `notas` | TEXT | Observaciones opcionales |
-| `created_at` | TEXT | Marca de tiempo de creación |
+| `temporadas_pagadas` | INTEGER | Cuántas temporadas cubre el pago |
+| `monto_acciones` | REAL | Monto cobrado por acciones y hectáreas |
+| `multas` | REAL | Multas incluidas en el pago |
+| `total` | REAL | Total efectivamente cobrado en este pago |
+| `notas` | TEXT | Observaciones |
+| `created_at` | TEXT | Marca de tiempo |
 
-> **Restricción de negocio:** Solo puede existir **un pago por accionista por temporada**. El sistema bloquea el registro si ya existe un pago para esa combinación.
+> **Restricción:** solo puede existir **un pago por accionista y temporada**.
 
-> **Abonos y total:** Cuando un accionista ha realizado abonos previos, el campo `total` del pago guarda solo el monto efectivamente cobrado en ese pago final (es decir, la diferencia entre el monto total adeudado y lo ya abonado).
+> **Lo que significa un pago.** Existir es lo que cuenta: si hay un pago, la temporada está saldada, sin comparar montos. Un pago parcial debe registrarse como abono. Los campos de monto son el registro de lo cobrado, no la condición.
+
+> **No agregar columnas de dinero aquí.** Cualquier cobro nuevo distinto de la cuota es un **cargo**. La migración v10 eliminó `cuota_extraordinaria` y `otros_ingresos` de `pagos`, `abonos` y `deudores_config` justamente por esto.
 
 ### 3.5 Tabla `abonos`
 
-Pagos parciales que reducen la deuda sin cancelarla por completo.
-
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `id` | INTEGER PK | Identificador único |
-| `numero_ingreso` | INTEGER | N° de comprobante (misma secuencia que pagos) |
+| `numero_ingreso` | INTEGER | N° del talonario físico |
 | `accionista_id` | INTEGER FK | Accionista que abona |
-| `temporada_id` | INTEGER FK | Temporada a la que corresponde |
-| `fecha` | TEXT | Fecha del abono |
-| `temporadas_cubiertas` | INTEGER | Siempre 0 en abonos (no cierra la deuda) |
-| `monto` | REAL | Monto del abono aplicado a acciones/hectáreas |
-| `multas` | REAL | Parte de multas incluidas en el abono |
-| `cuota_extraordinaria` | REAL | Parte de cuota extraordinaria |
-| `otros_ingresos` | REAL | Otros importes |
-| `total` | REAL | Suma de todos los campos del abono |
-| `notas` | TEXT | Observaciones opcionales |
-| `created_at` | TEXT | Marca de tiempo de creación |
+| `temporada_id` | INTEGER FK | Temporada en que se registra el abono |
+| `fecha` | TEXT | Fecha del abono. **Determina qué multas alcanza a reducir** |
+| `temporadas_cubiertas` | INTEGER | Heredado; un abono no cierra temporadas |
+| `monto` | REAL | Monto abonado a cuota |
+| `multas` | REAL | Parte del abono imputada a multas |
+| `total` | REAL | Total del abono. Es la cifra que se reparte |
+| `notas` | TEXT | Observaciones |
+| `created_at` | TEXT | Marca de tiempo |
 
-### 3.6 Tabla `deudores_config`
+### 3.6 Tabla `deudores_config` — eliminada
 
-Configuración específica por accionista y temporada para el cálculo de la deuda. Esta tabla permite personalizar cuántas temporadas adeuda un accionista y si tiene cobros adicionales particulares.
+Guardaba `temporadas_adeudadas`, un contador de temporadas impagas que se cobraba entero al precio de la temporada **activa**, repreciando una temporada antigua al valor de hoy. La migración v16 elimina la tabla: la deuda anterior al sistema entra como `deuda_inicial` y la posterior se deriva de las temporadas reales, cada una con su propio precio. Con eso el contador no responde ninguna pregunta. Ver `context.md` D19.
 
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| `accionista_id` | INTEGER PK | Accionista (clave compuesta con temporada_id) |
-| `temporada_id` | INTEGER PK | Temporada |
-| `temporadas_adeudadas` | INTEGER | Número de temporadas sin pagar (mínimo 1) |
-| `cuota_extraordinaria` | REAL | Cobro adicional específico para este deudor |
-| `otros_ingresos` | REAL | Otros importes específicos para este deudor |
+Las filas se eliminan sin convertirse en montos: el contador nunca fue una cifra — dice cuántas temporadas debía alguien, no cuánto — y cualquier monto reconstruido a partir de él quedaría al precio de hoy.
 
 ### 3.7 Tabla `cargos`
 
-Cobros extras con nombre libre asociados a accionistas específicos.
+Define el cargo: su nombre, la temporada a la que pertenece y **la tarifa**, no el monto por persona.
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `id` | INTEGER PK | Identificador único |
-| `nombre` | TEXT | Nombre del cargo (ej. "Limpieza", "Mantención canal") |
-| `accionista_id` | INTEGER FK | Accionista al que se le cobra |
+| `nombre` | TEXT | Nombre del cargo (ej. "Limpia de acequia") |
 | `temporada_id` | INTEGER FK | Temporada a la que pertenece |
-| `monto` | REAL | Monto del cargo |
-| `fecha` | TEXT | Fecha asignada al cargo |
-| `pagado` | INTEGER (0/1) | Indica si el cargo ya fue cobrado |
-| `notas` | TEXT | Observaciones opcionales |
-| `created_at` | TEXT | Marca de tiempo de creación |
+| `tarifa` | REAL | Valor base del cargo |
+| `tipo_tarifa` | TEXT | `fija` o `proporcional` |
+| `fecha` | TEXT | Fecha del cargo |
+| `notas` | TEXT | Observaciones |
+| `created_at` | TEXT | Marca de tiempo |
+
+### 3.8 Tabla `cargo_accionistas`
+
+A quiénes se les cobra el cargo.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | INTEGER PK | Identificador único |
+| `cargo_id` | INTEGER FK | Cargo (borrado en cascada) |
+| `accionista_id` | INTEGER FK | Accionista al que se cobra |
+| `monto` | REAL | Monto guardado. **El cálculo lo ignora**: el monto se recalcula desde la tarifa |
+| `pagado` | INTEGER (0/1) | Saldado por un pago o marcado a mano |
+
+Es única la combinación `(cargo_id, accionista_id)`: un accionista no puede aparecer dos veces en el mismo cargo.
+
+### 3.9 Tabla `deuda_inicial`
+
+Deuda anterior al sistema, transcrita desde los registros de la administración.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | INTEGER PK | Identificador único |
+| `accionista_id` | INTEGER FK | Accionista (borrado en cascada) |
+| `concepto` | TEXT | Texto libre, ej. "Multa temporada 2024-2025". Se imprime en el aviso |
+| `tipo` | TEXT | `CUOTA`, `OTRO` o `MULTA` — también es el orden en que se cobran |
+| `monto` | REAL | El monto tal como lo tiene la administración |
+| `notas` | TEXT | Observaciones |
+| `created_at` | TEXT | Marca de tiempo |
+
+Se guarda **por líneas** y no como un total único, para que quepa tanto un desglose por temporada como una cifra global. No tiene columna `pagado`: es la deuda más antigua que existe, así que los abonos la consumen primero y lo que queda debiendo se deriva, igual que todo lo demás. Eso es lo que permite pagarla por partes.
 
 ---
 
@@ -182,230 +214,283 @@ Cobros extras con nombre libre asociados a accionistas específicos.
 ```
 temporadas
     │
-    ├──< pagos >──── accionistas >──< propiedades
-    ├──< abonos >─┘
-    ├──< deudores_config >─┘
-    └──< cargos >─┘
+    ├──< pagos >────────── accionistas ──< propiedades
+    ├──< abonos >─────────┤
+    │                     ├──< deuda_inicial
+    └──< cargos >──< cargo_accionistas >──┘
 ```
 
-- Un **accionista** tiene una o más **propiedades** (relación 1:N).
-- Un **accionista** puede tener múltiples **abonos** en una misma temporada (1:N).
-- Un **accionista** solo puede tener **un pago** por temporada (relación 1:1 lógica).
-- Existe como máximo **una configuración de deuda** por accionista y temporada (`deudores_config` es 1:1 por combinación).
-- Un **cargo** está asociado a exactamente un accionista y una temporada, pero se pueden crear lotes (batch) del mismo cargo para múltiples accionistas a la vez.
+- Un **accionista** tiene una o más **propiedades** (1:N). Sus acciones y hectáreas son siempre la suma de ellas.
+- Un **accionista** puede tener múltiples **abonos** por temporada (1:N).
+- Un **accionista** tiene como máximo **un pago** por temporada.
+- Un **cargo** pertenece a una temporada y se cobra a varios accionistas mediante `cargo_accionistas` (N:M).
+- Un **accionista** puede tener varias líneas de **deuda inicial**, que no dependen de ninguna temporada.
 
 ---
 
 ## 5. Fórmulas y Cálculos
 
-### 5.1 Monto por Acciones
+Todo el cálculo de deuda vive en un solo lugar: `calcularDeudaPorTemporada`, en `src/shared/deuda.ts`. Está en `src/shared/` para que el proceso principal y la interfaz ejecuten **el mismo código** y no dos copias que se desincronicen.
 
-El monto base que un accionista debe pagar se calcula así:
-
-```
-montoAcciones = (valorAccion × acciones + valorAccion × hectareas) × temporadasPagadas
-             = valorAccion × (acciones + hectareas) × temporadasPagadas
-```
-
-**Donde:**
-- `valorAccion` es el precio unitario definido en la temporada activa.
-- `acciones` y `hectareas` son los totales sumados de todas las propiedades del accionista.
-- `temporadasPagadas` es el número de temporadas que se están cancelando (puede ser más de una si hay deuda acumulada de años anteriores).
-
-**Ejemplo:** Si `valorAccion = $50.000`, el accionista tiene `2 acciones` y `3 hectáreas`, y paga `1 temporada`:
-```
-montoAcciones = 50.000 × (2 + 3) × 1 = $250.000
-```
-
-### 5.2 Multas
-
-La multa penaliza las temporadas no pagadas a tiempo:
+### 5.1 Unidades
 
 ```
-multas = 5.000 × acciones × hectareas × periodosAtrasados
+unidades = acciones + hectareas
 ```
 
-**Regla especial:** Si `acciones` es 0, se usa 1. Si `hectareas` es 0, se usa 1. Esto evita que accionistas sin datos registrados queden exentos de multas.
+Una hectárea se cobra exactamente igual que una acción. No es una simplificación: el canal cobra lo mismo por una que por otra. Las acciones y hectáreas de un accionista son siempre la **suma de todas sus propiedades**.
 
-**Ejemplo:** Accionista con `2 acciones`, `3 hectáreas`, `2 períodos atrasados`:
-```
-multas = 5.000 × 2 × 3 × 2 = $60.000
-```
-
-**Ejemplo con datos vacíos (acciones=0, hectareas=0):**
-```
-multas = 5.000 × 1 × 1 × 2 = $10.000
-```
-
-### 5.3 Total a Pagar
+### 5.2 Cuota de una temporada
 
 ```
-total = montoAcciones + multas + cuotaExtraordinaria + otrosIngresos
+cuota(t) = t.valor_accion × unidades
 ```
 
-### 5.4 Total con Abonos Descontados (Pago Final)
+Cada temporada usa **su propio** `valor_accion`. Una temporada de hace tres años se cobra al precio que tenía entonces.
 
-Cuando un accionista ha realizado abonos previos y finalmente hace el pago completo, el total que se cobra en ese pago final descuenta lo ya abonado:
+**Ejemplo:** temporada con `valor_accion = $41.000`, accionista con `2 acciones` y `3 hectáreas`:
 
 ```
-totalPagoFinal = max(0, total - totalAbonado)
+cuota = 41.000 × (2 + 3) = $205.000
 ```
 
-Esto significa que el campo `total` en la tabla `pagos` representa solo lo cobrado en ese último pago, no la deuda original. Para el análisis contable completo se suman los abonos más el pago final.
+### 5.3 Monto de un cargo
+
+```
+si tipo_tarifa = 'fija'          →  monto = tarifa
+si tipo_tarifa = 'proporcional'  →  monto = tarifa × unidades
+```
+
+### 5.4 Multa por atraso
+
+La multa **no es un monto fijo**: es proporcional a la parte de la cuota que seguía impaga **en la fecha límite**. Se calcula una vez por cada temporada adeudada, con los valores de esa temporada, y se suman:
+
+```
+multa = Σ  para cada temporada t con fecha_multa definida y ya vencida:
+             fracción_pendiente(t) × unidades × t.monto_multa_por_accion
+
+fracción_pendiente(t) = 1 − (abonado a t con fecha ≤ t.fecha_multa) ÷ cuota(t)
+```
+
+Cuatro reglas, cada una decidida por separado:
+
+1. **Es proporcional, no fija.** Un accionista que debía el 20% de su cuota al vencer el plazo paga el 20% de la multa.
+2. **Se mide en la fecha límite, no hoy.** Solo cuentan los abonos con fecha **anterior o igual** a `fecha_multa`; los posteriores no reducen la multa. Es lo que hace que la multa sea cobrable: como los abonos pagan primero la deuda y al final las multas, medirla contra el saldo actual la dejaría en cero apenas se salda la cuota, y nadie pagaría una multa nunca.
+3. **El denominador es solo la cuota**, sin los cargos de esa temporada. Los cargos tienen su propio estado de pago, y cobrar multa por atraso sobre una multa por inasistencia impaga sería una multa sobre una multa.
+4. **Depende de la fecha.** Una temporada genera multa solo si `fecha_multa` está definida y ya pasó. Si es `NULL`, esa temporada no genera multa nunca.
+
+**Ejemplo:** accionista con `5 unidades`, cuota de `$205.000`, `monto_multa_por_accion = $5.000`, que al vencer el plazo había abonado `$41.000`:
+
+```
+fracción_pendiente = 1 − 41.000 / 205.000 = 0,8
+multa              = 0,8 × 5 × 5.000 = $20.000
+```
+
+### 5.5 Total pendiente
+
+```
+total_pendiente = deuda inicial pendiente
+                + Σ por temporada (cuota pendiente + cargos pendientes + multa pendiente)
+```
+
+Donde "pendiente" es el monto menos lo que le tocó de los abonos según el reparto de la sección 7.
+
+### 5.6 Redondeo
+
+Los pesos chilenos no tienen decimales. Cada monto se redondea a peso entero con `roundPesos`, **al escribirlo** en la base de datos: pagos, abonos, la tarifa de un cargo y cada monto derivado de ella, las líneas de deuda inicial, y el `valor_accion` y `monto_multa_por_accion` de una temporada.
+
+Antes el redondeo ocurría solo al mostrar, sobre columnas `REAL` sin redondear, y por eso una columna de montos en pantalla podía no sumar exactamente el total que se mostraba abajo. Ahora la cifra guardada y la mostrada son el mismo número. Ver `context.md` D8. Las acciones y hectáreas conservan sus 4 decimales: esta regla es solo para dinero.
 
 ---
 
 ## 6. Flujo de Pagos
 
-### Registro de un Pago Completo
+### Registro de un pago completo
 
 1. El usuario selecciona el accionista en el formulario "Nuevo Pago".
-2. El sistema carga automáticamente:
-   - Sus acciones y hectáreas totales.
-   - Las temporadas adeudadas desde `deudores_config` (o 1 por defecto).
-   - Los abonos previos ya realizados (`total_abonado`).
-3. Se calcula el monto por acciones, las multas (opcionalmente), y el total.
-4. Si hay abonos previos, se muestra el descuento y el **total a pagar** es la diferencia.
-5. El sistema verifica que no exista ya un pago para ese accionista y temporada.
-6. Al confirmar, se crea un registro en la tabla `pagos` y el accionista deja de aparecer en la lista de deudores.
+2. El sistema carga su deuda completa desde `deudores:get-deuda`: deuda inicial, cada temporada con saldo, sus cargos y su multa.
+3. Se muestra el total pendiente, lo ya abonado y lo que queda por cobrar.
+4. El sistema verifica que no exista ya un pago para ese accionista y temporada.
+5. Al confirmar se crea el registro en `pagos` y el accionista deja de figurar como deudor — salvo que le quede algún cargo impago, que lo reabre.
 
-### Registro de un Abono
+> **El monto no se escribe a mano.** En el pago completo los únicos campos editables son la temporada, la fecha, el N° de ingreso y las notas. Todas las cifras salen del cálculo de deuda: el monto por acciones es la suma de las cuotas pendientes, las multas la suma de las multas pendientes, y el total es el pendiente completo. Como no hay monto escrito a mano, no puede haber un error de tipeo que dé por pagado a alguien que no pagó.
 
-1. El usuario accede desde "Nuevo Pago" (pestaña "Abono") o desde "Deudores".
-2. El sistema muestra la deuda total, lo abonado y el pendiente.
-3. El usuario ingresa el monto a abonar (se pre-rellena con el pendiente).
-4. Se crea un registro en la tabla `abonos`. El accionista sigue apareciendo como deudor.
+El único monto que se escribe a mano es el del **abono**, y un abono nunca cierra una temporada.
+
+### Registro de un abono
+
+1. El usuario entra desde "Nuevo Pago" (pestaña "Abono") o desde "Deudores".
+2. El sistema muestra la deuda total, lo abonado y lo pendiente.
+3. El usuario ingresa el monto (viene pre-rellenado con el pendiente).
+4. Se crea el registro en `abonos`. El accionista sigue como deudor.
 5. Opcionalmente se genera un comprobante PDF con el saldo restante.
 
 ---
 
-## 7. Abonos: qué son y cómo funcionan
+## 7. Abonos: qué son y cómo se reparten
 
-Un **abono** es un pago parcial. A diferencia del pago completo, un abono:
+Un **abono** es un pago parcial. A diferencia del pago completo, no cierra la temporada y se pueden registrar varios.
 
-- **No cierra la deuda.** El accionista sigue apareciendo en la lista de deudores.
-- Se pueden registrar **múltiples abonos** para el mismo accionista y temporada.
-- El campo `total_abonado` se calcula dinámicamente como la **suma de todos los abonos** para ese accionista y temporada.
-- Los abonos se descuentan automáticamente al registrar el pago final.
+### El orden del reparto
 
-**Regla:** El sistema no bloquea registrar abonos si ya existe un pago completo, pero sí muestra una advertencia, ya que sería incoherente abonar a una deuda ya cancelada.
+Los abonos se toman como un fondo común, en orden de fecha, y se consumen **de la deuda más antigua a la más nueva**:
+
+1. **Deuda inicial** (lo anterior al sistema), y dentro de ella: `CUOTA`, luego `OTRO`, luego `MULTA`.
+2. **Cada temporada, de la más antigua a la más nueva**, y dentro de cada una:
+   1. la **cuota**,
+   2. los **cargos**,
+   3. la **multa por atraso**.
+
+Una temporada se salda **por completo** — cuota, cargos y multa — antes de que el dinero llegue a la siguiente. Es decir: si quedan dos temporadas debiendo y el abono cubre la primera cuota y sobra, lo que sobra paga la **multa de esa primera temporada**, no la cuota de la segunda.
+
+Lo que sobra una vez cubierto todo se informa como **excedente a favor**; no se pierde ni se descarta en silencio.
+
+### Por qué importa la fecha del abono
+
+El total no cambia según el orden, pero la **fecha** sí importa para las multas: solo el dinero que llegó antes de la fecha límite de una temporada reduce la multa de esa temporada (sección 5.4).
 
 ---
 
-## 8. Deudores y Configuración de Deuda
+## 8. Deuda Inicial (deuda anterior al sistema)
 
-La pantalla "Deudores" muestra todos los accionistas activos **que no tienen un pago completo** para la temporada activa.
+Cuando la administración empezó a usar el sistema, muchos accionistas ya arrastraban deuda. Esa deuda **se transcribe, no se reconstruye**: se ingresa la cifra que tiene la administración en sus registros, y no se recalcula nunca. La cifra *es* el hecho.
 
-### Qué muestra cada fila:
+Se ingresa en líneas, cada una con su concepto, su tipo (`CUOTA`, `OTRO` o `MULTA`) y su monto. Se puede cargar a mano en la ficha del accionista o importarla desde Excel.
+
+**No es un cargo**, aunque los cargos sean la vía normal para cobrar algo distinto de la cuota. Un cargo se define por una tarifa y su monto por persona se recalcula desde ella, así que un cargo no puede llevar una cifra distinta para cada accionista. Un saldo inicial no es un cobro nuevo: es el punto de partida.
+
+Las líneas de tipo `MULTA` **no** se cuentan en el total de multas del sistema, que solo incluye las multas por atraso calculadas por la aplicación.
+
+> **⚠ Abierto.** Falta decidir si esas multas heredadas, cuando se cobran, aparecen como ingreso por multa en el resumen contable. La propuesta es mostrarlas en una línea propia, "Multa temporadas pasadas", pero está pendiente de confirmación con la asociación.
+
+---
+
+## 9. Deudores
+
+La pantalla "Deudores" muestra los accionistas activos con deuda pendiente.
+
+**Un accionista es deudor si** no tiene pago para la temporada **o** tiene cualquier cargo impago. Un cargo agregado después reabre una cuenta que ya estaba saldada — es deliberado: la alternativa sería que los cobros quedaran invisibles hasta la temporada siguiente.
+
+### Qué muestra cada fila
 
 | Columna | Cálculo |
 |---------|---------|
-| **Monto adeudado** | `valorAccion × (acciones + hectareas) × temporadasAdeudadas` |
-| **Multas** | `5.000 × acciones × hectareas × temporadasAdeudadas` |
-| **Total** | Monto adeudado + Multas + Cuota Extraordinaria + Otros Ingresos |
-| **Ya abonado** | Suma de todos los abonos de ese accionista para la temporada |
-| **Pendiente** | Total − Ya abonado |
+| **Cuotas** | Suma de las cuotas pendientes de todas las temporadas adeudadas, cada una a su propio `valor_accion` |
+| **Cargos** | Suma de los cargos impagos |
+| **Multas** | Suma de las multas por atraso, calculadas según la sección 5.4 |
+| **Abonado** | Total de abonos del accionista |
+| **Pendiente** | Lo que queda por cobrar una vez repartidos los abonos |
 
-### Configuración de deuda (`deudores_config`)
-
-Desde la pantalla de Deudores, se puede editar para cada accionista:
-- **Temporadas adeudadas:** Cuántas temporadas arrastra sin pagar. Por defecto es 1.
-- **Cuota Extraordinaria:** Un cobro adicional específico para ese deudor.
-- **Otros Ingresos:** Otros importes a cobrar al deudor.
-
-Estos valores se guardan en `deudores_config` y se usan al registrar el pago o abono.
+Tanto esta pantalla como la ficha del accionista, el formulario de pago y el aviso de cobranza leen **el mismo cálculo** (`deudores:get-deuda`), de modo que no pueden mostrar cifras distintas entre sí.
 
 ---
 
-## 9. Cargos
+## 10. Cargos
 
-Los cargos son cobros adicionales con **nombre libre** (definido por el usuario) que se asocian a uno o más accionistas para una temporada específica.
+Los cargos son cobros adicionales con **nombre libre**, dirigidos a uno o varios accionistas de una temporada. Son la única vía para cobrar algo distinto de la cuota.
 
-**Ejemplos de uso:**
-- "Limpieza" — cobro por servicio de limpieza del canal que contrató un grupo de accionistas.
-- "Mantención compuerta" — gasto específico de reparación.
+**Ejemplos de uso:** limpia de acequia, cuota extraordinaria, multa por inasistencia a reunión, multa por inasistencia a votación. Estas cuatro deben aparecer siempre como opción, y además se pueden crear cargos nuevos.
 
-### Diferencia entre Cargo y Cuota Extraordinaria
+### Tarifa fija o proporcional
 
-| Concepto | Cargo | Cuota Extraordinaria |
-|----------|-------|----------------------|
-| Nombre | Libre (definido por usuario) | Sin nombre (campo genérico) |
-| Origen | Tabla `cargos` | Campo en `deudores_config` |
-| Múltiples por accionista | Sí | No (un valor por temporada) |
-| Se descuenta del pago | No directamente | Sí, incluida en el total del pago |
-| Gestión | Página "Cargos" | Pantalla "Deudores" |
+Un cargo no siempre se reparte según las acciones:
+
+| `tipo_tarifa` | Monto por accionista |
+|---------------|----------------------|
+| `fija` | `tarifa` — el mismo monto para todos |
+| `proporcional` | `tarifa × unidades` — a más acciones y hectáreas, más paga |
 
 ### Creación en lote
 
-Al crear un cargo nuevo, el usuario puede seleccionar múltiples accionistas a la vez. El sistema crea un registro individual por cada accionista seleccionado, todos con el mismo nombre, monto y fecha.
+Al crear un cargo el usuario puede seleccionar varios accionistas a la vez. Se crea un cargo y una fila en `cargo_accionistas` por cada accionista seleccionado.
 
 ### Estado del cargo
 
-Cada cargo tiene un estado **pendiente** o **pagado** que se puede marcar manualmente. Esto permite llevar un registro de cobros ya efectuados independientemente del sistema de pagos principal.
+Cada cargo tiene estado **pendiente** o **pagado**. `pagado` significa saldado por un pago o marcado a mano. La cobertura por abonos **no** lo cambia: eso se deriva del reparto de abonos, no se guarda.
+
+### Los cargos se cobran en la temporada siguiente
+
+Un cargo emitido durante una temporada se cobra junto con ella y aparece en el aviso de cobranza dentro del bloque de esa temporada.
 
 ---
 
-## 10. Multas
+## 11. Multas
 
-Las multas se calculan automáticamente pero el usuario puede modificarlas manualmente en el formulario antes de guardar.
+Hay **dos cosas distintas que se llaman multa**, y no se calculan igual:
 
-**Fórmula:**
-```
-multas = 5.000 × max(acciones, 1) × max(hectareas, 1) × temporadasAtrasadas
-```
+| | Multa por atraso | Multa por inasistencia |
+|---|---|---|
+| Qué es | Penalización por pagar fuera de plazo | Penalización por faltar a una reunión o votación |
+| Cómo se crea | Automática, calculada por el sistema | A mano, como **cargo**, a accionistas determinados |
+| Dónde se guarda | No se guarda: se calcula al momento | En `cargos` / `cargo_accionistas` |
+| Fórmula | Sección 5.4 | La del cargo: fija o proporcional |
 
-El botón "Auto-calcular" en el formulario de pago aplica esta fórmula usando los valores del accionista y las temporadas a pagar.
+La **multa por atraso** no se almacena en ninguna tabla. Se recalcula cada vez a partir de la fecha límite de cada temporada, su valor de multa y los abonos con su fecha. Se decidió así a propósito: no hay filas que "cristalizar" ni proceso que deba correr a medianoche, cosa importante en una aplicación que solo existe cuando alguien la abre.
 
-**Cuándo se aplican:** Solo en pagos de accionistas que tienen temporadas adeudadas (`temporadas_adeudadas > 1`). Un accionista al día no debería tener multas.
+La fecha límite de pago se puede mover: es un campo de la temporada (`fecha_multa`). Si se corre hacia adelante, las multas de esa temporada se recalculan solas.
 
 ---
 
-## 11. Número de Ingreso
+## 12. Número de Ingreso
 
-El **N° Ingreso** es el número de comprobante que aparece en el recibo entregado al accionista. Es una secuencia única compartida entre **pagos** y **abonos**.
+El **N° Ingreso** es el número del **talonario físico de recibos** que se entrega al accionista. Se escribe a mano al momento de pagar; no lo genera el sistema.
+
+El sistema sugiere el siguiente número disponible al abrir un formulario de pago o abono, y el usuario puede cambiarlo:
 
 ```
 próximo_número = MAX(numero_ingreso en pagos, numero_ingreso en abonos) + 1
 ```
 
-El sistema sugiere automáticamente el próximo número disponible al abrir un formulario de pago o abono. El usuario puede modificarlo si es necesario.
+**Es único:** un recibo, un número, y no se reutiliza. Lo garantiza `idx_pagos_numero_ingreso`, un índice único **parcial** sobre `pagos` que solo cubre los valores mayores que 0: el 0 no es un número de recibo sino "sin número registrado" — es lo que dejó la migración v7 y lo que queda si nadie escribe uno — y varios pagos pueden estar legítimamente en ese estado. Ver `context.md` D16.
+
+Los abonos quedan deliberadamente fuera del índice: un recibo que abarcara las dos tablas no se puede expresar con un solo índice.
+
+> **Ojo al leer el Excel de la administración.** En el listado de accionistas el mismo número de ingreso aparece repetido en **cada fila de propiedad** que cubre ese pago, y a veces en filas de personas distintas de una misma familia o sucesión. Eso no son pagos distintos: es un solo pago escrito en varias filas. En el archivo de *Ingresos*, que es de donde se leen los pagos, cada recibo es una sola fila con un solo pagador y un solo total.
 
 ---
 
-## 12. Temporadas
+## 13. Temporadas
 
-Cada temporada define el contexto económico del período:
+Cada temporada define el contexto económico de su período:
 
-- **Solo una temporada puede estar activa a la vez.** Al activar una, las demás quedan inactivas.
-- El `valor_accion` de la temporada activa es el precio unitario usado en todos los cálculos de cobro.
-- Los pagos y abonos siempre se asocian a una temporada específica.
-- La lista de deudores siempre muestra la situación respecto a la **temporada activa**.
+- Va aproximadamente de **marzo a fines de febrero** del año siguiente.
+- **Solo una temporada está activa a la vez.** Al activar una, las demás quedan inactivas.
+- Cada temporada guarda **su propio** `valor_accion`, `fecha_multa` y `monto_multa_por_accion`. Una temporada antigua se cobra con sus valores, no con los de la temporada activa.
+- Los pagos y abonos siempre se asocian a una temporada.
+
+**El sistema solo calcula deuda de las temporadas que él mismo administró.** No se cargan temporadas históricas ni se reconstruyen sus valores: lo anterior al sistema entra como deuda inicial (sección 8), con las cifras del papel, que son las que valen.
 
 ---
 
-## 13. Resumen Contable
+## 14. Resumen Contable
 
-La pantalla "Resumen Contable" muestra los totales de **pagos + abonos** para una temporada seleccionada.
+La pantalla "Resumen Contable" muestra lo recaudado en una temporada: **pagos + abonos**.
 
 ### Totales generales
 
-Suma de todos los `monto_acciones`, `multas`, `cuota_extraordinaria`, `otros_ingresos` y `total` de los registros de pagos y abonos de la temporada.
+Suma de `monto_acciones`, `multas` y `total` de los pagos y abonos de la temporada, más lo recaudado por cargos.
+
+Los cargos cuyo nombre contiene "multa" se cuentan como **ingreso por multas**; el resto aparece en su propia línea. De esta forma el ingreso por multas incluye los dos tipos de multa.
 
 ### Desglose mensual
 
-Los mismos totales agrupados por mes, útil para informes de caja y rendición de cuentas.
+Los mismos totales agrupados por mes, para informes de caja y rendición de cuentas.
 
-> **Importante:** El `total` de un pago con abonos previos ya descuenta lo abonado. Por eso, para calcular el total real recaudado en la temporada, la vista suma tanto los abonos como los pagos (no sería correcto sumar solo los pagos).
+### Exportar los ingresos de una temporada
+
+La pantalla "Pagos por Mes" tiene un selector **Por mes / Por temporada**. En modo temporada lista todos los ingresos de la temporada elegida y el botón "Exportar Excel" genera una planilla con pagos y abonos juntos, ordenados por fecha, con un subtotal por mes y el total general. Los abonos van incluidos porque la recaudación de una temporada no son solo sus pagos completos; la columna `Tipo` los distingue.
+
+> **Importante:** el `total` de un pago con abonos previos ya descuenta lo abonado. Por eso, para saber lo realmente recaudado en la temporada hay que sumar abonos **y** pagos; sumar solo los pagos dejaría fuera dinero que sí entró.
 
 ---
 
-## 14. Avisos de Cobranza
+## 15. Avisos de Cobranza
 
 El **aviso de cobranza** es la hoja que se imprime y se entrega al accionista, y contra la cual paga en la oficina. Por eso **cobra toda la deuda vigente al día en que se imprime**, no solamente la cuota de la temporada activa.
 
 ### Qué incluye, en este orden
 
-1. **Temporadas anteriores** — las líneas de deuda inicial (deuda anterior al sistema) que aún tengan saldo, con su tipo (Cuota / Multa / Otro) y su concepto.
+1. **Temporadas anteriores** — las líneas de deuda inicial que aún tengan saldo, con su tipo (Cuota / Multa / Otro) y su concepto.
 2. **Cada temporada con saldo pendiente, de la más antigua a la más nueva**, y dentro de cada una:
    - **Cuota por acciones** — lo que queda por pagar de esa temporada, ya descontados los abonos aplicados a ella. Si hubo abonos, la línea lo indica: *"Cuota por acciones · abonado $100.000"*.
    - **Cargos pendientes** de esa temporada (limpia de acequia, cuota extraordinaria, multa por inasistencia, etc.).

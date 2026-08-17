@@ -10,7 +10,6 @@ export default function NuevoPago() {
     selectedAcc,
     form, setForm,
     abonoForm, setAbonoForm,
-    deudorConfig,
     printComprobante, setPrintComprobante,
     existingPago,
     saved,
@@ -30,6 +29,8 @@ export default function NuevoPago() {
     multaDetalle,
     cargosDetalle,
     cargosPendientesDetalle,
+    totalCargos,
+    temporadasConCuota,
     handleSearchChange,
     selectAccionista,
     handleTemporadaChange,
@@ -235,7 +236,9 @@ export default function NuevoPago() {
               <button className="btn-secondary" onClick={() => navigate(-1)}>Cancelar</button>
               <button
                 className="btn-primary disabled:opacity-40 disabled:cursor-not-allowed"
-                disabled={!!existingPago}
+                // Until the deuda arrives every figure on this form is 0, and a
+                // pago settles the temporada whatever it says (D2).
+                disabled={!!existingPago || !selectedAcc || !deuda}
                 onClick={() => setConfirming(true)}
               >
                 Guardar pago
@@ -284,8 +287,10 @@ export default function NuevoPago() {
                   <div className="flex justify-between gap-4">
                     <span>
                       Cuota por acciones
+                      {/* Each season is priced at its own valor_accion (D13), so
+                          the active season's rate is only a reference here. */}
                       <span className="block text-xs text-gray-400">
-                        {formatCLP(activeTemporada.valor_accion)} × ({selectedAcc.acciones} acc + {selectedAcc.hectareas} ha) × {deudorConfig.temporadas_adeudadas} temporada{deudorConfig.temporadas_adeudadas !== 1 ? 's' : ''}
+                        {selectedAcc.acciones} acc + {selectedAcc.hectareas} ha · {temporadasConCuota} temporada{temporadasConCuota !== 1 ? 's' : ''} pendiente{temporadasConCuota !== 1 ? 's' : ''}
                       </span>
                     </span>
                     <span className="tabular-nums font-medium">{formatCLP(deuda?.temporadas.reduce((s, t) => s + t.pendiente_cuota, 0) ?? 0)}</span>
@@ -326,7 +331,7 @@ export default function NuevoPago() {
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="text-center">
                     <div className="text-xs text-gray-500 mb-0.5">Total cargos</div>
-                    <div className="font-semibold text-gray-800 tabular-nums">{formatCLP(deudorConfig.total_cargos)}</div>
+                    <div className="font-semibold text-gray-800 tabular-nums">{formatCLP(totalCargos)}</div>
                   </div>
                   <div className="text-center border-l border-amber-200">
                     <div className="text-xs text-gray-500 mb-0.5">Pendiente</div>
@@ -448,9 +453,9 @@ export default function NuevoPago() {
                       ))
                     : <div className="flex justify-between"><span>Multas:</span><span>{formatCLP(form.multas)}</span></div>
                   )}
-                  {deudorConfig.total_cargos > 0 && (
+                  {totalCargos > 0 && (
                     <>
-                      <div className="flex justify-between text-indigo-700"><span>Cargos adicionales:</span><span>+ {formatCLP(deudorConfig.total_cargos)}</span></div>
+                      <div className="flex justify-between text-indigo-700"><span>Cargos adicionales:</span><span>+ {formatCLP(totalCargos)}</span></div>
                       {cargosDetalle.map(c => (
                         <div key={c.id} className="flex justify-between text-xs text-indigo-500 pl-3">
                           <span>{c.nombre}{c.pagado ? ' (pagado)' : ''}</span>

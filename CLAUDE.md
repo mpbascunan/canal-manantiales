@@ -105,6 +105,13 @@ Schema changes follow a fixed procedure:
    `hasColumn()` so re-runs are safe.
 3. Bump `LATEST_VERSION` to `N`.
 
+`SCHEMA` is `exec`ed against **existing** databases too, before the migrations run. So a new
+constraint in it (a `UNIQUE` index, a `CHECK`) is applied to old rows that may violate it, and
+it throws there — before the migration that would have cleaned them up ever runs, leaving the
+client unable to open their own database. Rows are therefore made to satisfy new constraints in
+`resolverColisionesDeUnicidad`, which is called *before* `exec(SCHEMA)`; the numbered migration
+only stamps the version.
+
 There is deliberately no second copy of the schema. A hand-maintained mirror drifted
 silently for eleven migrations before being removed, because nothing loads it and so
 nothing can catch it being wrong.
@@ -122,16 +129,24 @@ backup API (not a file copy) so the WAL is included.
 `calcularMultas`, `calcularMultaVencimiento`, and `calcularDeuda` (which returns the full
 `DeudaBreakdown` the debt cards render). Amounts are CLP, formatted with `formatCLP`.
 
-Two rules are duplicated in SQL in `src/main/db/handlers/deudores.ts` and `cargos.ts`, and
-must be changed in both places:
+`src/shared/deuda.ts` is shared by both processes and holds the rules that must not be written
+twice: `calcularDeudaPorTemporada` (the whole debt), `calcularMontoCargo` (`tipo_tarifa = 'fija'`
+→ flat `tarifa`; otherwise `tarifa × (acciones + hectareas)`) and `roundPesos`. There used to be
+a second copy of the charge amount as a SQL `CASE` in three queries; do not write another one —
+select the `tarifa` and resolve it in TypeScript.
 
-- **Charge amount**: `tipo_tarifa = 'fija'` → flat `tarifa`; otherwise `tarifa × (acciones + hectareas)`.
-- **Shareholder totals**: `acciones`/`hectareas` no longer exist on `accionistas` — they are
-  always `SUM`ed from `propiedades` through the `PROPS_AGG` join fragment (copied verbatim
-  into both handlers), which also builds the `nombres_propiedades` list.
+**Money is rounded on write**, not only at display: every insert of a peso amount goes through
+`roundPesos` (pagos, abonos, cargo tarifa and montos, deuda_inicial, a temporada's rates).
+`acciones`/`hectareas` keep their 4 decimals — the rule is about money only.
+
+One rule is still duplicated: **shareholder totals**. `acciones`/`hectareas` do not exist on
+`accionistas` — they are always `SUM`ed from `propiedades` through the `PROPS_AGG` join fragment,
+copied verbatim into `accionistas.ts` and `deudores.ts`.
 
 A shareholder counts as a debtor when they have no `pago` for the season **or** any unpaid
-`cargo` — a late charge re-opens an otherwise settled account.
+`cargo` — a late charge re-opens an otherwise settled account. There is no stored count of owed
+seasons: `deudores_config.temporadas_adeudadas` was removed in migration v16, and the two
+channels that answer "what is owed" are `deudores:get-deuda` and `deudores:list-deuda`.
 
 ### Excel and PDF
 

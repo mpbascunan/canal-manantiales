@@ -1,7 +1,18 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../connection'
+import { calcularMontoCargo, roundPesos } from '../../../shared/deuda'
+
+/** `acciones + hectareas`, always summed from propiedades (D9). */
+const UNIDADES_SQL = `
+  SELECT COALESCE(SUM(acciones), 0) + COALESCE(SUM(hectareas), 0) AS unidades
+  FROM propiedades WHERE accionista_id = ?
+`
 
 export function registerCargoHandlers(): void {
+  /** One shareholder's chargeable units, for pricing a proporcional tarifa. */
+  const unidadesDe = (accionistaId: number): number =>
+    (getDb().prepare(UNIDADES_SQL).get(accionistaId) as { unidades: number }).unidades
+
   // List cargo headers for a temporada with accionista count and total monto
   ipcMain.handle('cargos:list-by-temporada', (_e, temporadaId: number) => {
     return getDb()
@@ -58,9 +69,8 @@ export function registerCargoHandlers(): void {
     return { ...cargo, accionistas }
   })
 
-  // Create a cargo header + junction rows in one transaction.
-  // For 'proporcional': monto = tarifa × (acciones + hectareas).
-  // For 'fija': monto = tarifa (same for every accionista).
+  // Create a cargo header + junction rows in one transaction. The per-accionista
+  // amount comes from `calcularMontoCargo`, the single copy of that rule (G6).
   ipcMain.handle(
     'cargos:create',
     (
@@ -77,20 +87,9 @@ export function registerCargoHandlers(): void {
     ) => {
       const db = getDb()
       const tipoTarifa = input.tipo_tarifa ?? 'proporcional'
-
-      const getAccionista = db.prepare(
-        `SELECT COALESCE(pt.total_acciones,  0) AS acciones,
-                COALESCE(pt.total_hectareas, 0) AS hectareas
-         FROM accionistas a
-         LEFT JOIN (
-           SELECT accionista_id,
-                  SUM(acciones)  AS total_acciones,
-                  SUM(hectareas) AS total_hectareas
-           FROM propiedades
-           GROUP BY accionista_id
-         ) pt ON pt.accionista_id = a.id
-         WHERE a.id = ?`
-      )
+      // Whole pesos on the way in (D8): every monto derived from this tarifa is
+      // rounded, so an unrounded tarifa could never be reconciled against them.
+      const tarifa = roundPesos(input.tarifa)
 
       const insertCargo = db.prepare(
         `INSERT INTO cargos (nombre, temporada_id, tarifa, tipo_tarifa, fecha, notas)
@@ -106,7 +105,7 @@ export function registerCargoHandlers(): void {
         const result = insertCargo.run({
           nombre: input.nombre,
           temporada_id: input.temporada_id,
-          tarifa: input.tarifa,
+          tarifa,
           tipo_tarifa: tipoTarifa,
           fecha: input.fecha,
           notas: input.notas ?? null
@@ -114,14 +113,11 @@ export function registerCargoHandlers(): void {
         cargoId = Number(result.lastInsertRowid)
 
         for (const accionistaId of input.accionista_ids) {
-          let monto: number
-          if (tipoTarifa === 'fija') {
-            monto = input.tarifa
-          } else {
-            const row = getAccionista.get(accionistaId) as { acciones: number; hectareas: number } | undefined
-            monto = input.tarifa * ((row?.acciones ?? 0) + (row?.hectareas ?? 0))
-          }
-          insertCA.run({ cargo_id: cargoId, accionista_id: accionistaId, monto })
+          insertCA.run({
+            cargo_id: cargoId,
+            accionista_id: accionistaId,
+            monto: calcularMontoCargo(tipoTarifa, tarifa, unidadesDe(accionistaId))
+          })
         }
       })()
 
@@ -135,19 +131,6 @@ export function registerCargoHandlers(): void {
     const cargo = db.prepare('SELECT tarifa, tipo_tarifa FROM cargos WHERE id = ?').get(cargoId) as { tarifa: number; tipo_tarifa: string } | undefined
     if (!cargo) return { success: false }
 
-    const getAccionista = db.prepare(
-      `SELECT COALESCE(pt.total_acciones,  0) AS acciones,
-              COALESCE(pt.total_hectareas, 0) AS hectareas
-       FROM accionistas a
-       LEFT JOIN (
-         SELECT accionista_id,
-                SUM(acciones)  AS total_acciones,
-                SUM(hectareas) AS total_hectareas
-         FROM propiedades
-         GROUP BY accionista_id
-       ) pt ON pt.accionista_id = a.id
-       WHERE a.id = ?`
-    )
     const insertCA = db.prepare(
       `INSERT OR IGNORE INTO cargo_accionistas (cargo_id, accionista_id, monto)
        VALUES (@cargo_id, @accionista_id, @monto)`
@@ -155,14 +138,11 @@ export function registerCargoHandlers(): void {
 
     db.transaction(() => {
       for (const accionistaId of accionistaIds) {
-        let monto: number
-        if (cargo.tipo_tarifa === 'fija') {
-          monto = cargo.tarifa
-        } else {
-          const row = getAccionista.get(accionistaId) as { acciones: number; hectareas: number } | undefined
-          monto = cargo.tarifa * ((row?.acciones ?? 0) + (row?.hectareas ?? 0))
-        }
-        insertCA.run({ cargo_id: cargoId, accionista_id: accionistaId, monto })
+        insertCA.run({
+          cargo_id: cargoId,
+          accionista_id: accionistaId,
+          monto: calcularMontoCargo(cargo.tipo_tarifa, cargo.tarifa, unidadesDe(accionistaId))
+        })
       }
     })()
 
@@ -207,27 +187,23 @@ export function registerCargoHandlers(): void {
     return { success: true }
   })
 
-  // List cargos assigned to a specific accionista in a specific temporada.
-  // Proporcional: monto recomputed live from propiedades. Fija: use stored tarifa.
+  // List cargos assigned to a specific accionista in a specific temporada. The
+  // monto is recomputed from the tarifa rather than read from the stored
+  // cargo_accionistas.monto, so a propiedad edited after the cargo was issued is
+  // reflected — and it is recomputed by `calcularMontoCargo`, not by a second
+  // copy of the rule in SQL (G6).
   ipcMain.handle('cargos:list-by-accionista', (_e, accionistaId: number, temporadaId: number) => {
-    return getDb()
+    const unidades = unidadesDe(accionistaId)
+    const rows = getDb()
       .prepare(
-        `SELECT c.id, c.nombre, c.fecha, c.tarifa, c.tipo_tarifa, c.notas, ca.pagado,
-                CASE WHEN c.tipo_tarifa = 'fija' THEN c.tarifa
-                     ELSE c.tarifa * (COALESCE(pt.total_acciones, 0) + COALESCE(pt.total_hectareas, 0))
-                END AS monto
+        `SELECT c.id, c.nombre, c.fecha, c.tarifa, c.tipo_tarifa, c.notas, ca.pagado
          FROM cargo_accionistas ca
          JOIN cargos c ON c.id = ca.cargo_id
-         LEFT JOIN (
-           SELECT accionista_id,
-                  SUM(acciones)  AS total_acciones,
-                  SUM(hectareas) AS total_hectareas
-           FROM propiedades
-           GROUP BY accionista_id
-         ) pt ON pt.accionista_id = ca.accionista_id
          WHERE ca.accionista_id = ? AND c.temporada_id = ?
          ORDER BY c.fecha DESC, c.nombre`
       )
-      .all(accionistaId, temporadaId)
+      .all(accionistaId, temporadaId) as { tarifa: number; tipo_tarifa: string }[]
+
+    return rows.map(r => ({ ...r, monto: calcularMontoCargo(r.tipo_tarifa, r.tarifa, unidades) }))
   })
 }

@@ -61,7 +61,8 @@ holding the same water right.
 
 Consequence: `unidades = acciones + hectareas` is a domain invariant. It is also the base for
 proportional cargos and for both multas. If the board ever sets a separate hectárea rate,
-this is a change to the domain model, not a tweak — every formula and both SQL copies change.
+this is a change to the domain model, not a tweak — but there is now one place to change it:
+`calcularDeudaPorTemporada` and `calcularMontoCargo` in `src/shared/deuda.ts`.
 
 ### D2 — A pago means the temporada is settled; amount is a record, not a condition · *decided, guard missing*
 
@@ -82,20 +83,22 @@ either way; only the per-row breakdown on the aviso differs.
 
 Implemented as `calcularDeudaPorTemporada` in `src/shared/deuda.ts`, with scenarios in
 `tests/flows/deuda.test.ts`. It lives in `src/shared/` rather than in the renderer so the
-main process can use the same function instead of a second copy in SQL (cf. G6).
+main process uses the same function instead of a second copy in SQL (cf. G6).
 
 Consequence: `calcularDeuda` in the renderer still subtracts `SUM(abonos.total)` from the
 season subtotal as a single lump with no ordering, and is still what the UI renders — see G1.
 
-### D4 — `temporadas_adeudadas` is a manual override, on purpose · *decided*
+### D4 — `temporadas_adeudadas` is a manual override, on purpose · ~~*decided*~~ **superseded by D19**
 
-Intent is derived-by-default from missing pagos, with the administrator able to adjust or
-forgive seasons for a particular accionista. Deals get made; the system must not overrule the
-person running it.
+*Kept for the record; do not build on it.* The intent was derived-by-default from missing pagos,
+with the administrator able to adjust or forgive seasons for a particular accionista — deals get
+made, and the system must not overrule the person running it.
 
-Consequence: today there is no derivation at all — the field defaults to 1 and is only ever
-what a human typed. The override is correct; the missing default is a gap (G4). Historical
-debt from before the app existed can only enter this way.
+What actually happened is that the derivation was never built, so the field was only ever what a
+human typed, and every formula priced it at the active season's rate. D19 removes the column:
+pre-app debt is transcribed as `deuda_inicial` (D14) and everything after it derives from real
+`temporadas` rows (D13), which leaves the override with nothing to override. Forgiving a season
+is a `deuda_inicial` adjustment now.
 
 ### D5 — Cargos are the single extension point for money beyond the cuota — except multas · *decided*
 
@@ -106,7 +109,7 @@ Consequence: **never add another money column** to `pagos` or `abonos`. A new ki
 is a cargo. Multas stay first-class in the formulas because they are computed automatically
 from the temporada's rules rather than issued by hand to named people.
 
-### D6 — The multa por atraso is proportional, frozen at the deadline, and summed per temporada · *decided, not implemented*
+### D6 — The multa por atraso is proportional, frozen at the deadline, and summed per temporada · *decided, implemented*
 
 The fine is proportional to the share of a temporada's cuota still unpaid — not a flat charge.
 It is computed **once per unpaid temporada**, using that temporada's own
@@ -138,15 +141,17 @@ Four rules, each decided separately:
    passed. `fecha_multa IS NULL` means no fine for that season, ever. The current temporada
    therefore stops being a special case.
 
-Consequence: `calcularMultas` (flat, `× (temporadas_adeudadas − 1)`) is wrong and goes away —
-the `− 1` was approximating rule 4 before there was a per-season deadline to test.
-`calcularMultaVencimiento` has the right shape but the wrong scope: applied once, to the active
-temporada only, at today's rate, against the live balance. Today `calcularDeuda` **adds both**,
-so a late shareholder with a backlog is charged twice.
+Implemented by `calcularDeudaPorTemporada` in `src/shared/deuda.ts`, and there only.
 
-Consequence: the fine can no longer be derived from `temporadas_adeudadas`. That is a scalar
-count priced entirely at the active season's rate; this formula needs per-temporada debt
-carrying each season's own rate. See D13 and G4.
+The two formulas this replaced are deleted (G7). `calcularMultas` was flat, at
+`× (temporadas_adeudadas − 1)` — the `− 1` approximated rule 4 before there was a per-season
+deadline to test. `calcularMultaVencimiento` had the right shape but the wrong scope: applied
+once, to the active temporada only, at today's rate, against the live balance. `calcularDeuda`
+**added both**, so a late shareholder with a backlog was charged twice.
+
+Consequence: the fine cannot be derived from `temporadas_adeudadas`. That was a scalar count
+priced entirely at the active season's rate; this formula needs per-temporada debt carrying
+each season's own rate, which is why D19 removed the column outright.
 
 Consequence: `fracción_pendiente` needs to know how much of each abono landed on which
 temporada, so the abono allocation (D3/G1) is now a prerequisite for the multa, not an
@@ -161,14 +166,16 @@ Consequence: `accionistas:update` deletes every propiedad and re-inserts them, s
 on every save — see G3. "Cambiar accionista de propiedad" (README 33) and "subdivisión de
 propiedades" (README 35) cannot be built on that save path. Fix identity first.
 
-### D8 — Money is rounded to whole pesos when written to the database · *decided, not implemented*
+### D8 — Money is rounded to whole pesos when written to the database · *decided, implemented*
 
 CLP has no minor unit. Rounding at write time is the only way stored totals and displayed
 totals can never disagree.
 
-Consequence: today rounding happens only at display, in `formatCLP`, over `REAL` columns —
-so a column of displayed rows can fail to sum to the displayed total (G5). Acciones and
-hectáreas keep their 4 decimals; this rule is about money only.
+`roundPesos` in `src/shared/deuda.ts` is applied on every money insert: pagos, abonos, the
+cargo tarifa and each derived monto, deuda_inicial lines, and a temporada's `valor_accion`
+and `monto_multa_por_accion`. The columns are still `REAL`; what changed is that nothing
+fractional reaches them. Acciones and hectáreas keep their 4 decimals — this rule is about
+money only.
 
 ### D9 — Totals always derive from propiedades, never from accionistas · *decided*
 
@@ -197,27 +204,22 @@ because many historical records have no RUT on file.
 Consequence: no uniqueness constraint yet, and the Excel importer does not validate. If
 duplicates matter for identity, that is a new decision.
 
-### D13 — Debt is derived per temporada, not counted · *decided, not implemented*
+### D13 — Debt is derived per temporada, not counted · *decided, implemented*
 
 A shareholder owes temporada *t* when no `pago` exists for *t*. The set of owed seasons is
 derived from real `temporadas` rows, and each contributes its **own** `valor_accion`,
 `fecha_multa` and `monto_multa_por_accion`.
 
-This replaces the scalar model: `deudores_config.temporadas_adeudadas` is a count, and every
-formula multiplies it by the *active* season's rate, so an old season is silently repriced at
+This replaced the scalar model: `deudores_config.temporadas_adeudadas` was a count, and every
+formula multiplied it by the *active* season's rate, so an old season was silently repriced at
 today's cuota and today's fine. D6 cannot be computed that way — it reads a different multa
-amount per season.
-
-Consequence: seasons people currently owe must exist as `temporadas` rows with their real
-historical values. Backfilling them is a prerequisite for D6, and the data has to come from the
-administration — see open question 1.
-
-Consequence: `temporadas_adeudadas` survives only in its D4 role — a manual override for debt
-predating the app, or for a deal the administrator has struck. It stops being the primary
-source of the season count.
+amount per season. The column, its table and its handlers were removed in migration v16 (D19).
 
 Consequence: this settles README item 23 by construction — an old temporada is charged at its
 own `valor_accion`, because that is the row the calculation reads.
+
+Consequence: the derivation only ever looks at seasons the app itself managed. Nothing is
+backfilled and nothing is reconstructed — see D19.
 
 ### D14 — Debt predating the app is transcribed, not reconstructed · *decided; stored and imported, not yet shown*
 
@@ -281,32 +283,175 @@ for everyone, stating exactly that; money abonado beyond every debt is printed a
 favor rather than silently dropped. `deudores:list-deuda` therefore takes `incluirSinDeuda`,
 since the deudores listing wants those rows gone and the bulk print wants them kept.
 
+### D16 — `numero_ingreso` is unique · *decided, implemented*
+
+One receipt from the physical talonario, one number, never reused. Enforced by
+`idx_pagos_numero_ingreso`, a **partial** unique index over `pagos` `WHERE numero_ingreso > 0`.
+Partial because 0 is not a receipt number: it is what migration v7 left behind and what the
+pago form still defaults to when nobody types one, and several payments can legitimately be in
+that state. Abonos are deliberately left out — a receipt spanning both tables is not
+expressible as one index, and the decision below is about the payment record.
+
+The constraint can be added without a cleanup, and both sources agree it is the right rule: the
+live database holds 301 pagos, every one numbered, 301 distinct numbers, and in the
+administration's `Ingresos Temp.` file — the sheet payments are actually read from — a receipt is
+one row, with one payer and one total.
+
+Worth knowing when reading the other spreadsheet: in `LISTADO DE ACCIONISTAS` the same number is
+written across **every property row the payment covers**, so it repeats there by design (63 of
+304 numbers appear more than once) and sometimes spans rows belonging to different, related
+people. That is a listing artefact, not a second payment — receipt 5450 is written on the three
+SOTO AVILA parcelas 13-A/B/C but was paid once, by "Sucesión Juan Soto Poblete", for $226.808.
+Uniqueness holds on the payment; it does not hold on that sheet's rows.
+
+Consequence: a receipt can settle propiedades belonging to more than one accionista while being
+booked to a single payer — a sucesión paying for its members' parcelas, say. The app has no way
+to express that today, so those receipts are the ones the import leaves for the administration to
+enter by hand, listed in the "no importadas" report (see §4).
+
+### D17 — `numero_socio` is unique, enforced in the database, the form and the importer · *decided, implemented*
+
+It is the association's own identifier for a member, and it identifies exactly one.
+
+Three places, because each fails differently:
+
+- **The database** — `idx_accionistas_numero_socio`, a partial unique index
+  `WHERE TRIM(COALESCE(numero_socio, '')) != ''`, so the invariant cannot be violated at all.
+  Partial because "no number on file" is a real state that many records share.
+- **The form** — `AccionistaModal` refuses to save a number another accionista holds, and
+  `accionistas:create`/`:update` reject it again server-side with the *name of the holder*,
+  which "ya está en uso" alone would not tell an administrator with 396 members.
+- **The importer** — a `N° Socio` the sheet gives to two different people is reported as a
+  `conflicto` and imported nowhere. The hard part is that the same socio is legitimately typed
+  several ways across their rows ("ARTEMIO CORNEJO" / "ARTEMIO CORNEJO MORAGA"), so a
+  difference in spelling is not a collision; what separates the two is *containment* — a
+  shortened name uses a subset of the fuller one's words, two different people share none.
+
+There are no duplicates to correct: all 396 accionistas carry a number, and none repeats — also
+under a normalising comparison that strips leading zeros, case and whitespace.
+
+Consequence, and the thing that matters more than the constraint: **the numbers currently stored
+are not the association's numbers.** They are a sequence assigned during import — 1…454 with 58
+holes, running in the order accionistas first appear in the PARCELAS sheet. The `N° Socio` column
+in the revision spreadsheet is present but entirely blank, all 591 rows. README items 1 and 9 say
+the real numbers "ya existen" and must be associated; until that list arrives, a `UNIQUE`
+constraint protects a local surrogate. Adding the constraint is still right — it costs nothing
+now and it is what makes the eventual re-map safe — but it does not make the numbers correct.
+
+### D18 — RUT is descriptive; uniqueness is not enforced · *decided*
+
+RUT is there to identify a person on paper, not to key anything in the system. D12 already makes
+it optional and validates the check digit; that is as far as it goes. No `UNIQUE` constraint, no
+duplicate check in the form, no import validation.
+
+Consequence: `numero_socio` (D17) is the identity column. Nothing should ever be matched, joined
+or deduplicated on RUT.
+
+### D19 — The app computes debt only for seasons it managed; everything older is `deuda_inicial` · *decided, implemented*
+
+There are exactly two sources of debt, and the boundary between them is the day the app started
+keeping the books:
+
+- **Before it** — one or more `deuda_inicial` lines per accionista, transcribed from the
+  administration's records and never recalculated (D14).
+- **From it onwards** — derived from real `temporadas` rows, each priced at its own
+  `valor_accion` and fined at its own `fecha_multa` / `monto_multa_por_accion` (D13, D6).
+
+This closes the question D13 left open. Historical `temporadas` are **not** backfilled: the
+association's paper figures are authoritative, and reconstructing an old season from rates the
+app never saw would only ever be a guess dressed as a calculation. A season the app did not
+manage has no row, therefore contributes no cuota and generates no multa.
+
+Consequence: `deudores_config.temporadas_adeudadas` is **removed** — column, migration, IPC
+payloads, and the editor on the Deudores screen. It was the last piece of the scalar model: a
+count of seasons priced entirely at the active season's rate, which is exactly the mispricing
+D13 exists to prevent. With pre-app debt transcribed and later debt derived, nothing is left for
+it to answer. This retires D4, and it is what closed G4.
+
+Consequence: `deudores_config` is left holding only its primary key. Whether the table survives
+at all is an implementation detail — if nothing else lands in it, it goes.
+
+Consequence: forgiving a season, or striking a deal, is now an edit to that accionista's
+`deuda_inicial` lines rather than a decrement of a counter. That is a better record anyway: it
+carries a concepto saying what was forgiven.
+
 ---
 
 ## 4. Known gaps — code does not implement a decided rule
 
 | | Gap | Rule violated |
 |---|---|---|
-| **G2** | The payment form accepts any amount and still marks the temporada settled. | D2 |
+| **G2** | *Closed — see below.* The pago form no longer takes an amount at all. | D2 |
 | **G3** | `accionistas:update` deletes and re-inserts all propiedades, destroying their ids on every save. | D7 |
-| **G4** | Debt is the scalar `temporadas_adeudadas`, priced entirely at the *active* season's `valor_accion` and `monto_multa_por_accion`. There is no per-season derivation, and no default — it is 1 until a human changes it. | D13, D4 |
-| **G7** | `calcularDeuda`, `calcularMultas`, `calcularMultaVencimiento` and `tieneMultaVencimiento` still exist in `src/renderer/src/lib/formulas.ts` and still implement the old flat + double-charged multa. Only `calcularMultas` is still called, by the Accionistas listing; the rest are dead code waiting to be picked up by mistake. | D6 |
-| **G5** | Money is stored unrounded as `REAL`; rounding happens only at display. | D8 |
-| **G6** | The cargo amount formula (`fija` vs `proporcional`) is written twice — once in TypeScript, once in SQL inside `deudores.ts` and `cargos.ts`. Changing one silently diverges from the other. | — |
+| **G4** | *Closed — see below.* | D13, D19 |
+| **G5** | *Closed — see below.* | D8 |
+| **G6** | *Closed — see below.* | — |
+| **G7** | *Closed — see below.* | D6 |
 
-None of these are safe to fix casually: G2 and G5 both move numbers that the
-administration reconciles by hand against paper receipts.
+G3 is the only one left open, and it is deferred by decision rather than by oversight.
+
+**Deferred by decision, not by oversight.** *G3* — propiedad identity is left as it is for this
+version; it will be taken up together with README 33 and 35, which are the features that need it.
+Until then, treat propiedad ids as unstable and do not key anything on them.
+
+**G2 is closed, and by a better route than the one D2 asked for.** D2 wanted the form to refuse
+or warn when the typed amount did not match the computed total. Instead the pago form stopped
+taking an amount: its only editable fields are temporada, fecha, `numero_ingreso` and notas, and
+every figure it saves is seeded from `deudores:get-deuda` — `monto_acciones` from the pending
+cuotas, `multas` from the pending multas, `total` from `total_pendiente`. There is no typed
+amount left to disagree with anything, so the rule holds by construction rather than by
+validation. The editable-multa field and the "Auto-calcular" button this gap was written against
+are both gone.
+
+One residual, narrow but real: the save button is disabled only on `!!existingPago`, not on
+whether the debt has finished loading, and `totalCompleto` is `0` while `deuda` is still `null`.
+Confirming a pago inside that window would settle a temporada for $0. It needs the guard.
+
+**Rows the import could not place are the operator's to finish, and that is not a gap.** A pago
+whose payer matches no accionista is not written. The importer says so: the preview counts the
+rows it left out and offers "Descargar Excel de filas no importadas", whose `sin_accionista`
+sheet lists each one with its receipt, date, name and amount. From there the administration
+enters them by hand or creates the missing accionista and imports again.
+
+That is a deliberate division of labour, not a silent failure. The spreadsheets are the
+administration's own records, complete only they can judge, and an importer that guessed at an
+unmatched payer would be inventing accounting. Loading the data fully is the operator's
+responsibility; the app's job is to say exactly what it could not place, which it does.
+
+Worth knowing concretely, because it is the shape this takes in practice: in the 2025-2026
+import two receipts stayed out — 5450 ($226.808, `Susecion Juan Soto Poblete`) and 5521
+($707.332, `Hector Osvaldo Cáceres Lizana`). Neither payer exists in `accionistas`: the first is
+a sucesión whose parcelas the listing records under its three members, the second owns Sitio 26
+but was never created as an accionista. Both were reported at import time and are waiting in the
+"no importadas" report. Until someone enters them, the accionistas those receipts covered show
+as deudores.
 
 **Closed.** *G1* — abonos are now allocated explicitly by `calcularDeudaPorTemporada`
 (D3), and `deudores:get-deuda` / `deudores:list-deuda` are what the debt cards, the deudores
-listing and the pago form render. *G6* for the cargo formula — the SQL copy in `deudores.ts`
-now only resolves `fija` vs `proporcional` into a figure; the rules live in `src/shared/deuda.ts`.
-A related bug went with it: `abonos:create` used to flip every pending cargo to `pagado` once
-the total abonado reached their sum, so the same money paid the cargos *and* counted in full
-against the cuota. Coverage is derived now; `pagado` means settled by a pago or by hand.
+listing and the pago form render. A related bug went with it: `abonos:create` used to flip
+every pending cargo to `pagado` once the total abonado reached their sum, so the same money
+paid the cargos *and* counted in full against the cuota. Coverage is derived now; `pagado`
+means settled by a pago or by hand.
 *G8* — the aviso de cobranza now renders `deudores:get-deuda` directly (D15) and takes no
 `multaVencimiento` figure of its own. The deudores Excel export was already reduced from the
 same breakdown by the Deudores page.
+
+*G4* — `temporadas_adeudadas` is gone: migration v16 drops `deudores_config`, and
+`deudores:list`, `:get-config` and `:upsert-config` went with it. The last screen reading it
+was the Accionistas listing, whose "Cubierto" badge now comes from `total_pendiente`.
+
+*G7* — `calcularDeuda`, `calcularMultas`, `calcularMultaVencimiento` and
+`tieneMultaVencimiento` are deleted, along with `DeudaParams` and `DeudaBreakdown`.
+`src/renderer/src/lib/formulas.ts` is formatting plus `calcularMontoAcciones` and
+`calcularTotal`, which the pago form uses to seed a field before the real breakdown arrives and
+which no longer answer any question about debt.
+
+*G6* — `calcularMontoCargo` in `src/shared/deuda.ts` is the only implementation of the cargo
+amount. The SQL `CASE` copies in `deudores.ts` and `cargos.ts` are gone; `cargos:list-by-accionista`
+selects the tarifa and resolves it in TypeScript, as `computeDeuda` already did.
+
+*G5* — `roundPesos` is applied on every money insert (D8), so the stored figure and the
+displayed one are the same number rather than two roundings of it.
 
 ---
 
@@ -315,9 +460,15 @@ same breakdown by the Deudores page.
 1. **Do collected `deuda_inicial` MULTA lines count as multa income in the resumen contable?**
    (D14) — they are real fines, but they were not computed by D6 and belong to seasons the app
    never managed.
-2. **Is `numero_ingreso` unique?** It is the number of a physical receipt book, entered by
-   hand, and nothing enforces uniqueness. Migration v7 zeroed all existing values.
-3. **Does RUT uniqueness matter?** (D12)
+
+   *Provisional answer: yes, reported on their own line — "Multa temporadas pasadas" — so that
+   fines the app computed under D6 stay separately legible from fines it merely inherited.
+   Awaiting confirmation from the association before anything is built; do not implement it on
+   the strength of this note.*
+
+**Answered and moved into §3.** *Is `numero_ingreso` unique?* → D16, yes.
+*Is `numero_socio` unique?* → D17, yes, and enforced in three places.
+*Does RUT uniqueness matter?* → D18, no.
 
 ---
 
@@ -333,9 +484,12 @@ The aviso de cobranza is covered end to end in `tests/flows/avisos.test.ts`: rea
 the generated document (`tests/helpers/pdf.ts`) rather than trusted. That is the only export
 verified this way, and it is the one that leaves the building on paper.
 
-What it does **not** cover: the rest of the renderer. `calcularDeuda` in
-`src/renderer/src/lib/formulas.ts`, the debt cards, the pago form and the remaining PDF/Excel
-exports are still checked only by a person comparing the screen against paper. There is still
-no UI or e2e test (README item 29).
+`tests/flows/migraciones.test.ts` builds a v14 database by hand, with duplicate receipt numbers
+and duplicate socio numbers in it, and opens it the way the app does — the one path that only
+ever runs on the machine with real data.
+
+What it does **not** cover: the rest of the renderer. The debt cards, the pago form and the
+remaining PDF/Excel exports are still checked only by a person comparing the screen against
+paper. There is still no UI or e2e test (README item 29).
 
 Treat that as the main risk when changing anything in §3 or §4.

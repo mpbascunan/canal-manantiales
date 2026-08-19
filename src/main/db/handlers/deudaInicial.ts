@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../connection'
-import { roundPesos } from '../../../shared/deuda'
+import { normalizarTemporadasAdeudadas, roundPesos } from '../../../shared/deuda'
 import type { DeudaInicial, DeudaInicialInput } from '../../../shared/types'
 
 /**
@@ -40,8 +40,8 @@ export function registerDeudaInicialHandlers(): void {
     const db = getDb()
     const result = db
       .prepare(
-        `INSERT INTO deuda_inicial (accionista_id, concepto, tipo, monto, notas)
-         VALUES (@accionista_id, @concepto, @tipo, @monto, @notas)`
+        `INSERT INTO deuda_inicial (accionista_id, concepto, tipo, monto, temporadas_adeudadas, notas)
+         VALUES (@accionista_id, @concepto, @tipo, @monto, @temporadas_adeudadas, @notas)`
       )
       .run({
         accionista_id: input.accionista_id,
@@ -50,6 +50,7 @@ export function registerDeudaInicialHandlers(): void {
         // Whole pesos on the way in (D8), so the stored figure and the one on
         // screen can never disagree.
         monto: roundPesos(input.monto),
+        temporadas_adeudadas: normalizarTemporadasAdeudadas(input.temporadas_adeudadas),
         notas: input.notas ?? null
       })
     return db.prepare('SELECT * FROM deuda_inicial WHERE id = ?').get(result.lastInsertRowid)
@@ -59,13 +60,15 @@ export function registerDeudaInicialHandlers(): void {
     const db = getDb()
     db.prepare(
       `UPDATE deuda_inicial
-       SET concepto=@concepto, tipo=@tipo, monto=@monto, notas=@notas
+       SET concepto=@concepto, tipo=@tipo, monto=@monto,
+           temporadas_adeudadas=@temporadas_adeudadas, notas=@notas
        WHERE id=@id`
     ).run({
       id: linea.id,
       concepto: linea.concepto,
       tipo: linea.tipo,
       monto: roundPesos(linea.monto),
+      temporadas_adeudadas: normalizarTemporadasAdeudadas(linea.temporadas_adeudadas),
       notas: linea.notas ?? null
     })
     return db.prepare('SELECT * FROM deuda_inicial WHERE id = ?').get(linea.id)
@@ -87,8 +90,8 @@ export function registerDeudaInicialHandlers(): void {
       db.transaction(() => {
         db.prepare('DELETE FROM deuda_inicial WHERE accionista_id = ?').run(accionistaId)
         const insert = db.prepare(
-          `INSERT INTO deuda_inicial (accionista_id, concepto, tipo, monto, notas)
-           VALUES (@accionista_id, @concepto, @tipo, @monto, @notas)`
+          `INSERT INTO deuda_inicial (accionista_id, concepto, tipo, monto, temporadas_adeudadas, notas)
+           VALUES (@accionista_id, @concepto, @tipo, @monto, @temporadas_adeudadas, @notas)`
         )
         for (const linea of lineas) {
           insert.run({
@@ -96,6 +99,7 @@ export function registerDeudaInicialHandlers(): void {
             concepto: linea.concepto,
             tipo: linea.tipo,
             monto: roundPesos(linea.monto),
+            temporadas_adeudadas: normalizarTemporadasAdeudadas(linea.temporadas_adeudadas),
             notas: linea.notas ?? null
           })
         }

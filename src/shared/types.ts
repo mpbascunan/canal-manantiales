@@ -141,12 +141,22 @@ export interface DeudaInicial {
   concepto: string
   tipo: TipoDeudaInicial
   monto: number
+  /**
+   * How many seasons this line covers — one transcribed figure is often several
+   * years of unpaid cuotas. `null` when the records do not say.
+   *
+   * Descriptive, never operative: the `monto` is the fact, so no formula reads
+   * this. It is not the `deudores_config.temporadas_adeudadas` that migration v16
+   * dropped for pricing old seasons at today's cuota (D13, D19).
+   */
+  temporadas_adeudadas: number | null
   notas: string | null
   created_at: string
 }
 
 export type DeudaInicialInput = Omit<DeudaInicial, 'id' | 'created_at'> & {
   notas?: string | null
+  temporadas_adeudadas?: number | null
 }
 
 /** A `deuda_inicial` row joined to the accionista it belongs to. */

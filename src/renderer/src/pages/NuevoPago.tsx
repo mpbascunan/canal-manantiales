@@ -27,6 +27,7 @@ export default function NuevoPago() {
     restanteTras,
     totalCompleto,
     multaDetalle,
+    multaOmitidaDetalle,
     cargosDetalle,
     cargosPendientesDetalle,
     totalCargos,
@@ -174,6 +175,9 @@ export default function NuevoPago() {
                 <label className="label">Fecha</label>
                 <input type="date" className="input" value={form.fecha}
                   onChange={e => setForm(f => ({ ...f, fecha: e.target.value }))} />
+                <p className="mt-1 text-xs text-gray-400">
+                  Las multas por atraso se calculan a esta fecha, no a la de hoy.
+                </p>
               </div>
               <div>
                 <label className="label">N° Ingreso</label>
@@ -207,6 +211,17 @@ export default function NuevoPago() {
                     <div key={m.nombre} className="flex justify-between gap-4 text-amber-700">
                       <span>{m.nombre}</span>
                       <span className="tabular-nums">+ {formatCLP(m.monto)}</span>
+                    </div>
+                  ))}
+                  {multaOmitidaDetalle.map(m => (
+                    <div key={`om-${m.nombre}`} className="flex justify-between gap-4 text-green-700">
+                      <span>
+                        Multa por atraso {m.nombre}
+                        <span className="block text-xs text-green-600">
+                          Sin multa: el pago está dentro del plazo (hasta {m.fecha_multa.split('-').reverse().join('/')})
+                        </span>
+                      </span>
+                      <span className="tabular-nums">{formatCLP(0)}</span>
                     </div>
                   ))}
                   {cargosDetalle.map(c => (
@@ -301,6 +316,17 @@ export default function NuevoPago() {
                       <span className="tabular-nums">+ {formatCLP(m.monto)}</span>
                     </div>
                   ))}
+                  {multaOmitidaDetalle.map(m => (
+                    <div key={`om-${m.nombre}`} className="flex justify-between gap-4 text-green-700">
+                      <span>
+                        Multa por atraso {m.nombre}
+                        <span className="block text-xs text-green-600">
+                          Sin multa: el abono está dentro del plazo (hasta {m.fecha_multa.split('-').reverse().join('/')})
+                        </span>
+                      </span>
+                      <span className="tabular-nums">{formatCLP(0)}</span>
+                    </div>
+                  ))}
                   {cargosDetalle.map(c => (
                     <div key={c.id} className="flex justify-between gap-4 text-indigo-700">
                       <span>{c.nombre}{c.pagado ? ' (pagado)' : ''}</span>
@@ -360,6 +386,9 @@ export default function NuevoPago() {
                 <label className="label">Fecha</label>
                 <input type="date" className="input" value={abonoForm.fecha}
                   onChange={e => setAbonoForm(f => ({ ...f, fecha: e.target.value }))} />
+                <p className="mt-1 text-xs text-gray-400">
+                  Las multas por atraso se calculan a esta fecha, no a la de hoy.
+                </p>
               </div>
               <div>
                 <label className="label">N° Ingreso</label>

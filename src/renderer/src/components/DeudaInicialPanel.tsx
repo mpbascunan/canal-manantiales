@@ -8,6 +8,8 @@ interface Linea {
   concepto: string
   tipo: TipoDeudaInicial
   monto: string
+  /** Kept as the raw input string; empty means "not recorded". */
+  temporadas: string
 }
 
 /**
@@ -37,7 +39,8 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
     setEditing(lineas.map(l => ({
       concepto: l.concepto,
       tipo: l.tipo,
-      monto: String(l.monto)
+      monto: String(l.monto),
+      temporadas: l.temporadas_adeudadas === null ? '' : String(l.temporadas_adeudadas)
     })))
   }
 
@@ -46,7 +49,7 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
   }
 
   const addLinea = (): void => {
-    setEditing(prev => [...(prev ?? []), { concepto: '', tipo: 'MULTA', monto: '' }])
+    setEditing(prev => [...(prev ?? []), { concepto: '', tipo: 'MULTA', monto: '', temporadas: '' }])
   }
 
   const removeLinea = (index: number): void => {
@@ -62,6 +65,9 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
         concepto: l.concepto.trim() || DEUDA_TIPO_CONCEPTO[l.tipo],
         tipo: l.tipo,
         monto: Number(l.monto),
+        // Blank stays blank: the main process turns anything that is not a whole
+        // count of at least one season into null.
+        temporadas_adeudadas: l.temporadas.trim() === '' ? null : Number(l.temporadas),
         notas: null
       }))
 
@@ -113,6 +119,7 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
             <tr className="table-header">
               <th className="px-4 py-2 text-left">Concepto</th>
               <th className="px-4 py-2 text-left">Tipo</th>
+              <th className="px-4 py-2 text-right">Temporadas</th>
               <th className="px-4 py-2 text-right">Monto</th>
             </tr>
           </thead>
@@ -121,6 +128,9 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
               <tr key={l.id} className="table-row">
                 <td className="px-4 py-2">{l.concepto}</td>
                 <td className="px-4 py-2"><TipoDeudaTag tipo={l.tipo} /></td>
+                <td className="px-4 py-2 text-right tabular-nums text-gray-500">
+                  {l.temporadas_adeudadas ?? '—'}
+                </td>
                 <td className="px-4 py-2 text-right tabular-nums">{formatCLP(l.monto)}</td>
               </tr>
             ))}
@@ -148,6 +158,16 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
                 <option value="OTRO">Otro</option>
                 <option value="MULTA">Multa</option>
               </select>
+              <input
+                className="input w-24 text-right"
+                type="number"
+                min={1}
+                step={1}
+                placeholder="N° temp."
+                title="Cuántas temporadas cubre este monto (opcional)"
+                value={l.temporadas}
+                onChange={e => setLinea(i, { temporadas: e.target.value })}
+              />
               <input
                 className="input w-32 text-right"
                 type="number"
@@ -178,6 +198,10 @@ export function DeudaInicialPanel({ accionistaId, onChange }: {
           </div>
           <p className="text-xs text-amber-700">
             Los abonos descuentan esta deuda antes que cualquier temporada.
+          </p>
+          <p className="text-xs text-gray-400">
+            El N° de temporadas es solo referencial: indica cuántas temporadas cubre el monto y
+            no se usa para calcular la deuda.
           </p>
         </div>
       )}

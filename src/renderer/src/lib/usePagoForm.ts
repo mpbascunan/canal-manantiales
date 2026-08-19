@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from './ipc'
 import { calcularMontoAcciones, calcularTotal, toISODate } from './formulas'
@@ -8,6 +8,9 @@ import type { DeudaPorTemporada } from '../../../shared/deuda'
 import { nombreCompleto } from '../../../shared/types'
 
 export type Mode = 'completo' | 'abono'
+
+/** A date input is empty while it is being retyped; `''` must not reach the IPC. */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 export function usePagoForm() {
   const navigate = useNavigate()
@@ -80,30 +83,66 @@ export function usePagoForm() {
     if (t) {
       Promise.all([
         api.pagos.listByAccionista(a.id),
-        api.cargos.listByAccionista(a.id, t.id),
-        // The whole picture across temporadas (D13): the same figure the debt
-        // card shows, so the two can no longer disagree (README 15).
-        api.deudores.getDeuda(a.id)
-      ]).then(([pagos, cargos, d]: [any[], any[], DeudaPorTemporada]) => {
+        api.cargos.listByAccionista(a.id, t.id)
+      ]).then(([pagos, cargos]: [any[], any[]]) => {
         const dup = pagos.find((p: any) => p.temporada_id === t.id)
         setExistingPago(dup ?? null)
-        setDeuda(d)
         setCargosDetalle(cargos.map(c => ({ id: c.id, nombre: c.nombre, monto: c.monto, pagado: !!c.pagado })))
-
-        // A "pago completo" settles everything outstanding, so the form is
-        // seeded from the derived breakdown rather than from a season count.
-        const cuotas = d.temporadas.reduce((s, x) => s + x.pendiente_cuota, 0)
-        const multas = d.temporadas.reduce((s, x) => s + x.pendiente_multa, 0)
-        setForm(prev => ({
-          ...prev,
-          temporadas_pagadas: Math.max(1, d.temporadas.filter(x => x.pendiente_cuota > 0).length),
-          monto_acciones: cuotas,
-          multas
-        }))
-        setAbonoForm(prev => ({ ...prev, monto: d.total_pendiente }))
       })
     }
+    // The deuda itself is loaded by the effect below, which also reloads it
+    // whenever the date on the form moves.
   }
+
+  /**
+   * The date the debt is evaluated at: the one **on the form**, not today's.
+   *
+   * A pago transcribed weeks after the money changed hands is still a pago made
+   * on its own `fecha`. If that date falls on or before a temporada's
+   * `fecha_multa`, that temporada's multa por atraso never accrued and must not
+   * be charged (D6 rule 5) — reading the clock instead fined the accionista for
+   * the administration's delay in typing up the receipt.
+   */
+  const referenceDate = mode === 'completo' ? form.fecha : abonoForm.fecha
+
+  /**
+   * The `total_pendiente` last written into `abonoForm.monto`, so a refreshed
+   * debt can refill an untouched amount without overwriting a typed one.
+   */
+  const seededAmount = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!selectedAcc || !ISO_DATE.test(referenceDate)) return
+    let cancelled = false
+    // The whole picture across temporadas (D13): the same figure the debt card
+    // shows, so the two can no longer disagree (README 15).
+    api.deudores.getDeuda(selectedAcc.id, referenceDate).then((d: DeudaPorTemporada) => {
+      if (cancelled) return
+      setDeuda(d)
+
+      // A "pago completo" settles everything outstanding, so the form is
+      // seeded from the derived breakdown rather than from a season count.
+      const cuotas = d.temporadas.reduce((s, x) => s + x.pendiente_cuota, 0)
+      const multas = d.temporadas.reduce((s, x) => s + x.pendiente_multa, 0)
+      setForm(prev => ({
+        ...prev,
+        temporadas_pagadas: Math.max(1, d.temporadas.filter(x => x.pendiente_cuota > 0).length),
+        monto_acciones: cuotas,
+        multas
+      }))
+      // The ref is written here, not inside the updater: a state updater must
+      // stay pure — React can call it twice, and the second call would then see
+      // the value it had just written and read an untouched amount as typed.
+      const previousSeed = seededAmount.current
+      seededAmount.current = d.total_pendiente
+      setAbonoForm(prev =>
+        prev.monto === 0 || prev.monto === previousSeed
+          ? { ...prev, monto: d.total_pendiente }
+          : prev
+      )
+    })
+    return () => { cancelled = true }
+  }, [selectedAcc?.id, referenceDate])
 
   const selectAccionista = (a: Accionista) => selectAccionistaWith(a, activeTemporada ?? null)
 
@@ -143,6 +182,22 @@ export function usePagoForm() {
   const multaDetalle: { nombre: string; monto: number }[] = (deuda?.temporadas ?? [])
     .filter(t => t.pendiente_multa > 0)
     .map(t => ({ nombre: `Multa por atraso ${t.nombre}`, monto: t.pendiente_multa }))
+
+  /**
+   * Temporadas whose fine the *form's* date waives: the deadline has passed by
+   * now, but not by the date being registered. Shown so a receipt with no multa
+   * on it is visibly a deliberate consequence of the date, not a missing charge —
+   * silence there reads as a bug to whoever reconciles it on paper.
+   */
+  const multaOmitidaDetalle: { nombre: string; fecha_multa: string }[] = temporadas
+    .filter(t =>
+      t.fecha_multa !== null &&
+      t.fecha_multa < toISODate(new Date()) &&
+      ISO_DATE.test(referenceDate) &&
+      referenceDate <= t.fecha_multa &&
+      (deuda?.temporadas.some(x => x.temporada_id === t.id && x.pendiente_cuota > 0) ?? false)
+    )
+    .map(t => ({ nombre: t.nombre, fecha_multa: t.fecha_multa! }))
 
   const restanteTras = Math.max(0, pendienteParaAbono - abonoTotal)
   const totalCompleto = pendiente
@@ -229,6 +284,7 @@ export function usePagoForm() {
     restanteTras,
     totalCompleto,
     multaDetalle,
+    multaOmitidaDetalle,
     cargosDetalle,
     cargosPendientesDetalle,
     totalCargos,

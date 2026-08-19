@@ -39,6 +39,61 @@ describe('deuda inicial', () => {
     assert.equal(linea.monto, 240_001)
   })
 
+  describe('temporadas adeudadas', () => {
+    it('keeps the count of seasons a line covers', async () => {
+      const linea = await crear({ tipo: 'CUOTA', monto: 480_000, temporadas_adeudadas: 4 })
+
+      assert.equal(linea.temporadas_adeudadas, 4)
+    })
+
+    it('is null when the records do not say', async () => {
+      const linea = await crear()
+
+      assert.equal(linea.temporadas_adeudadas, null)
+    })
+
+    it('never prices the monto off the count', async () => {
+      // The whole reason deudores_config went in v16: a season count that gets
+      // multiplied by a rate invents a figure. The transcribed monto is the fact,
+      // and the count sitting next to it must not touch it.
+      const linea = await crear({ tipo: 'CUOTA', monto: 480_000, temporadas_adeudadas: 4 })
+
+      assert.equal(linea.monto, 480_000)
+    })
+
+    it('normalises a count that is not a whole number of seasons to null', async () => {
+      for (const value of [0, -2, 1.5, '' as unknown as number, NaN]) {
+        const linea = await crear({ temporadas_adeudadas: value })
+        assert.equal(linea.temporadas_adeudadas, null, `${String(value)} should not be stored`)
+      }
+    })
+
+    it('carries the count through an update and a replace', async () => {
+      const linea = await crear({ temporadas_adeudadas: 2 })
+
+      const updated = await invoke<DeudaInicial>('deuda-inicial:update', {
+        ...linea, temporadas_adeudadas: 3
+      })
+      assert.equal(updated.temporadas_adeudadas, 3)
+
+      const [reemplazada] = await invoke<DeudaInicial[]>(
+        'deuda-inicial:replace-for-accionista', accionista.id,
+        [{ accionista_id: accionista.id, concepto: 'Cuotas 2020-2024', tipo: 'CUOTA', monto: 600_000, temporadas_adeudadas: 5, notas: null }]
+      )
+      assert.equal(reemplazada.temporadas_adeudadas, 5)
+    })
+
+    it('clears the count when an update drops it', async () => {
+      const linea = await crear({ temporadas_adeudadas: 2 })
+
+      const updated = await invoke<DeudaInicial>('deuda-inicial:update', {
+        ...linea, temporadas_adeudadas: null
+      })
+
+      assert.equal(updated.temporadas_adeudadas, null)
+    })
+  })
+
   it('lists an accionista\'s lines with CUOTA before MULTA', async () => {
     await crear({ concepto: 'Multa 2023-2024', tipo: 'MULTA', monto: 100_000 })
     await crear({ concepto: 'Cuota impaga 2023-2024', tipo: 'CUOTA', monto: 300_000 })

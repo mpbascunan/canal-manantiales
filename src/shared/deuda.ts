@@ -5,6 +5,9 @@
  * code. The cargo amount used to be written twice, once in TypeScript and once
  * as a SQL `CASE`, and the copies could drift (context.md G6); `calcularMontoCargo`
  * below is now the only one, and the multa never had a second copy to begin with.
+ * `normalizarTemporadasAdeudadas` lives here for the same reason: the by-hand
+ * editor, the Excel import and the sheet parser all validate a season count, and
+ * three copies of "a whole number above zero" would be three chances to disagree.
  *
  * The rules that drive everything here:
  *
@@ -127,6 +130,29 @@ export interface DeudaPorTemporada {
 /** CLP has no minor unit, so every money value is a whole peso (D8). */
 export function roundPesos(value: number): number {
   return Math.round(value)
+}
+
+/**
+ * A `deuda_inicial.temporadas_adeudadas` as it will be stored: a whole number of
+ * seasons above zero, or `null` for "not recorded".
+ *
+ * Rejected rather than coerced. An unreadable *amount* can default to 0 and stay
+ * honest — nothing is owed — but 0 seasons, or the 1 you get from truncating 1.5,
+ * would be a claim the administration's records never made. The count is
+ * descriptive (D14) and a wrong one is worse than a missing one.
+ *
+ * The only copy of the rule: the handler that writes a line by hand, the Excel
+ * import, and the parser that reads the sheet all call this. Note it deliberately
+ * does *not* live behind a SQL `CHECK` — `CREATE TABLE IF NOT EXISTS` never
+ * reaches an existing database, so the constraint would hold on new installs and
+ * quietly not on the client's.
+ */
+export function normalizarTemporadasAdeudadas(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = typeof value === 'number'
+    ? value
+    : parseFloat(String(value).trim().replace(',', '.'))
+  return Number.isInteger(n) && n > 0 ? n : null
 }
 
 /** How a cargo prices one shareholder: a flat tarifa, or tarifa × unidades. */

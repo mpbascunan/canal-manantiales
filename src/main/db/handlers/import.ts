@@ -1,7 +1,7 @@
 import { ipcMain, dialog } from 'electron'
 import { readFileSync } from 'fs'
 import { getDb } from '../connection'
-import { roundPesos } from '../../../shared/deuda'
+import { normalizarTemporadasAdeudadas, roundPesos } from '../../../shared/deuda'
 import type { ImportResult, TipoDeudaInicial } from '../../../shared/types'
 
 /** One property line of the listado, as it will be written. */
@@ -126,6 +126,8 @@ export interface DeudaInicialPreviewRow {
   concepto: string
   tipo: TipoDeudaInicial
   monto: number
+  /** Referencial only (D14); `null` when the sheet has no such column. */
+  temporadas_adeudadas: number | null
   fila: number
   /** How the row was matched, so the preview can show why it is where it is. */
   matched_by?: 'numero_socio' | 'nombre'
@@ -669,6 +671,7 @@ function registerDeudaInicialImport(): void {
         concepto: String(row.concepto ?? '').trim(),
         tipo: normalizarTipo(row.tipo),
         monto: roundPesos(Number(row.monto ?? 0)),
+        temporadas_adeudadas: normalizarTemporadasAdeudadas(row.temporadas_adeudadas),
         fila: Number(row.fila ?? 0)
       }
 
@@ -735,8 +738,9 @@ function registerDeudaInicialImport(): void {
 
       const wipe = db.prepare('DELETE FROM deuda_inicial WHERE accionista_id = ?')
       const insert = db.prepare(
-        `INSERT INTO deuda_inicial (accionista_id, concepto, tipo, monto, notas)
-         VALUES (@accionista_id, @concepto, @tipo, @monto, @notas)`
+        `INSERT INTO deuda_inicial
+           (accionista_id, concepto, tipo, monto, temporadas_adeudadas, notas)
+         VALUES (@accionista_id, @concepto, @tipo, @monto, @temporadas_adeudadas, @notas)`
       )
 
       for (const [accionistaId, lineas] of porAccionista) {
@@ -747,6 +751,7 @@ function registerDeudaInicialImport(): void {
             concepto: String(linea.concepto ?? '').trim() || 'Deuda temporadas anteriores',
             tipo: normalizarTipo(linea.tipo),
             monto: roundPesos(Number(linea.monto ?? 0)),
+            temporadas_adeudadas: normalizarTemporadasAdeudadas(linea.temporadas_adeudadas),
             notas: `Importado desde Excel, fila ${linea.fila}`
           })
           imported++

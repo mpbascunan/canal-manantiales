@@ -84,8 +84,15 @@ describe('plantillas de importación', () => {
     })
 
     it('keeps the concepto written on each row', () => {
-      assert.equal(rows[0].concepto, 'Deuda temporada 2023-2024')
+      assert.equal(rows[0].concepto, 'Deuda temporadas 2021-2024')
       assert.equal(rows[2].concepto, 'Multa temporada 2024-2025')
+    })
+
+    it('reads the N° Temporadas column the template declares', () => {
+      // Row 1 covers three seasons and produces two lines — cuota and multa —
+      // and the span belongs to both. Row 3 leaves the cell blank, which is what
+      // the template tells the administration to do when it does not consta.
+      assert.deepEqual(rows.map(r => r.temporadas_adeudadas), [3, 3, 1, null])
     })
   })
 })

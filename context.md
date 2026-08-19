@@ -122,7 +122,7 @@ multa = Σ over temporadas t where t.fecha_multa is set and past:
 fracción_pendiente(t) = 1 − (abonado toward t by abonos dated ≤ t.fecha_multa) ÷ cuota(t)
 ```
 
-Four rules, each decided separately:
+Five rules, each decided separately:
 
 1. **Proportional, not flat.** This **overrides README item 6** ("Multa no es proporcial, es
    5.000 por accion o por hectarea"), which was the client's earlier understanding. Do not
@@ -140,8 +140,21 @@ Four rules, each decided separately:
 4. **Gated on the date.** A temporada generates a fine only when `fecha_multa` is set and has
    passed. `fecha_multa IS NULL` means no fine for that season, ever. The current temporada
    therefore stops being a special case.
+5. **"Passed" means passed by the date being registered, not by the clock.** The engine takes
+   the reference date as a parameter, and the pago/abono form passes **the fecha typed on the
+   form** — not `new Date()`. A payment received inside the plazo and transcribed weeks later
+   is still a payment made inside the plazo, and must not be fined for the administration's
+   delay in typing up the receipt. The date drives the *maturity* test only: an older
+   temporada whose `fecha_multa` the typed date is already past is still fined at its own
+   rate, so back-dating a receipt cannot wipe out a real backlog.
 
-Implemented by `calcularDeudaPorTemporada` in `src/shared/deuda.ts`, and there only.
+   Reading the clock is nonetheless the right default everywhere else — the debt cards, the
+   deudores listing and the avisos de cobro all ask "what is owed **now**", and pass nothing.
+
+Implemented by `calcularDeudaPorTemporada` in `src/shared/deuda.ts`, and there only. Note the
+reference date gates the multa and nothing else: abonos are counted whatever their date, so
+`deudores:get-deuda` with a past date answers "the debt as of then, knowing everything paid
+since" — it is not a historical snapshot.
 
 The two formulas this replaced are deleted (G7). `calcularMultas` was flat, at
 `× (temporadas_adeudadas − 1)` — the `− 1` approximated rule 4 before there was a per-season
@@ -244,6 +257,18 @@ fit without a schema change either way.
 No `pagado` column, unlike `cargo_accionistas`. `deuda_inicial` is the oldest debt there is, so
 it sits first in the D3 allocation and what remains owed is derived from the abonos like
 everything else — which is also what makes partial payment work.
+
+`temporadas_adeudadas` (migration v18) records how many seasons a line covers, since a single
+`CUOTA` line is usually several years rolled into one figure and there was nowhere else to put
+that. It is **descriptive only** and read by nothing that computes: the monto is the fact. This
+is deliberately not D19 coming back — that count was multiplied by the *active* season's cuota
+to produce an amount, which is the mispricing D13 exists to prevent. Anything that is not a
+whole count of at least one season is stored as `NULL`, and every row predating v18 is `NULL`,
+because reconstructing a count would mean dividing a transcribed monto by a rate the app never
+saw. The Excel import reads it from any header that names a count of temporadas, and in the
+column-per-tipo layout the row's count goes to every line the row produces — three seasons
+behind means three seasons of cuota and three of multa. `normalizarTemporadasAdeudadas` in
+`shared/deuda.ts` is the single copy of what counts as a valid one.
 
 Consequence: it is deliberately **not** a cargo, despite D5 making cargos the extension point
 for money beyond the cuota. A cargo is levied on a temporada at a `tarifa` and its per-person

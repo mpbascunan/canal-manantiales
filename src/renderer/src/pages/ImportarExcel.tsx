@@ -79,6 +79,7 @@ interface DeudaInicialPreviewRow {
   concepto: string
   tipo: TipoDeudaInicial
   monto: number
+  temporadas_adeudadas: number | null
   fila: number
   matched_by?: 'numero_socio' | 'nombre'
 }
@@ -1306,6 +1307,7 @@ function DeudaInicialTable({ title, color, rows }: {
                 <th className="px-3 py-1.5 font-medium">Accionista</th>
                 <th className="px-3 py-1.5 font-medium">Concepto</th>
                 <th className="px-3 py-1.5 font-medium">Tipo</th>
+                <th className="px-3 py-1.5 font-medium text-right">Temp.</th>
                 <th className="px-3 py-1.5 font-medium text-right">Monto</th>
               </tr>
             </thead>
@@ -1322,6 +1324,9 @@ function DeudaInicialTable({ title, color, rows }: {
                   <td className="px-3 py-1.5">{r.accionista_nombre}</td>
                   <td className="px-3 py-1.5 text-gray-600">{r.concepto}</td>
                   <td className="px-3 py-1.5 text-gray-500">{DEUDA_TIPO_LABELS[r.tipo]}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-gray-400">
+                    {r.temporadas_adeudadas ?? '—'}
+                  </td>
                   <td className="px-3 py-1.5 text-right tabular-nums">{formatCLP(r.monto)}</td>
                 </tr>
               ))}

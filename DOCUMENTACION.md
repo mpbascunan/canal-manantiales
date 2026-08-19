@@ -162,6 +162,8 @@ Guardaba `temporadas_adeudadas`, un contador de temporadas impagas que se cobrab
 
 Las filas se eliminan sin convertirse en montos: el contador nunca fue una cifra — dice cuántas temporadas debía alguien, no cuánto — y cualquier monto reconstruido a partir de él quedaría al precio de hoy.
 
+`deuda_inicial` tiene desde la v18 su propio `temporadas_adeudadas` (sección 3.9). No es esta columna que vuelve: describe un monto ya transcrito en vez de generarlo, y ninguna fórmula la lee.
+
 ### 3.7 Tabla `cargos`
 
 Define el cargo: su nombre, la temporada a la que pertenece y **la tarifa**, no el monto por persona.
@@ -202,10 +204,18 @@ Deuda anterior al sistema, transcrita desde los registros de la administración.
 | `concepto` | TEXT | Texto libre, ej. "Multa temporada 2024-2025". Se imprime en el aviso |
 | `tipo` | TEXT | `CUOTA`, `OTRO` o `MULTA` — también es el orden en que se cobran |
 | `monto` | REAL | El monto tal como lo tiene la administración |
+| `temporadas_adeudadas` | INTEGER | Cuántas temporadas cubre la línea. `NULL` si no consta |
 | `notas` | TEXT | Observaciones |
 | `created_at` | TEXT | Marca de tiempo |
 
 Se guarda **por líneas** y no como un total único, para que quepa tanto un desglose por temporada como una cifra global. No tiene columna `pagado`: es la deuda más antigua que existe, así que los abonos la consumen primero y lo que queda debiendo se deriva, igual que todo lo demás. Eso es lo que permite pagarla por partes.
+
+`temporadas_adeudadas` (migración v18) es **solo referencial**. Una línea de `CUOTA` suele ser
+varios años de cuotas impagas en una sola cifra, y el contador es el único lugar donde ese dato
+puede quedar registrado. No es la columna homónima de `deudores_config` que eliminó la
+migración v16 (sección 3.6): esa se multiplicaba por el valor de la temporada activa para
+inventar un monto; esta acompaña a un monto transcrito, que es el que vale, y **ninguna fórmula
+la lee**. Un valor que no sea un entero mayor que cero se guarda como `NULL`.
 
 ---
 
@@ -272,12 +282,17 @@ multa = Σ  para cada temporada t con fecha_multa definida y ya vencida:
 fracción_pendiente(t) = 1 − (abonado a t con fecha ≤ t.fecha_multa) ÷ cuota(t)
 ```
 
-Cuatro reglas, cada una decidida por separado:
+Cinco reglas, cada una decidida por separado:
 
 1. **Es proporcional, no fija.** Un accionista que debía el 20% de su cuota al vencer el plazo paga el 20% de la multa.
 2. **Se mide en la fecha límite, no hoy.** Solo cuentan los abonos con fecha **anterior o igual** a `fecha_multa`; los posteriores no reducen la multa. Es lo que hace que la multa sea cobrable: como los abonos pagan primero la deuda y al final las multas, medirla contra el saldo actual la dejaría en cero apenas se salda la cuota, y nadie pagaría una multa nunca.
 3. **El denominador es solo la cuota**, sin los cargos de esa temporada. Los cargos tienen su propio estado de pago, y cobrar multa por atraso sobre una multa por inasistencia impaga sería una multa sobre una multa.
 4. **Depende de la fecha.** Una temporada genera multa solo si `fecha_multa` está definida y ya pasó. Si es `NULL`, esa temporada no genera multa nunca.
+5. **"Ya pasó" se mide contra la fecha que se está registrando, no contra el día de hoy.** El formulario de pago y de abono calculan la multa **a la fecha escrita en el formulario**. Un pago recibido dentro del plazo y registrado en el sistema semanas después sigue siendo un pago hecho dentro del plazo: no corresponde multarlo por la demora en digitar el comprobante. La fecha solo decide qué plazos ya vencieron, así que una temporada más antigua cuyo plazo esa fecha ya superó **se multa igual** — retroceder la fecha de un comprobante no borra una deuda vieja.
+
+   El resto de la aplicación (tarjetas de deuda, listado de deudores, avisos de cobro) sigue calculando a la fecha de hoy, que es lo que corresponde a la pregunta "cuánto se debe **ahora**".
+
+   En pantalla, cuando la fecha del formulario exime una multa que a hoy sí correspondería, el detalle muestra la línea en verde con el plazo respectivo — para que un comprobante sin multa se lea como una consecuencia deliberada de la fecha y no como un cobro olvidado.
 
 **Ejemplo:** accionista con `5 unidades`, cuota de `$205.000`, `monto_multa_por_accion = $5.000`, que al vencer el plazo había abonado `$41.000`:
 
@@ -308,7 +323,7 @@ Antes el redondeo ocurría solo al mostrar, sobre columnas `REAL` sin redondear,
 ### Registro de un pago completo
 
 1. El usuario selecciona el accionista en el formulario "Nuevo Pago".
-2. El sistema carga su deuda completa desde `deudores:get-deuda`: deuda inicial, cada temporada con saldo, sus cargos y su multa.
+2. El sistema carga su deuda completa desde `deudores:get-deuda`: deuda inicial, cada temporada con saldo, sus cargos y su multa. La deuda se pide **a la fecha del formulario**, y se vuelve a pedir cada vez que esa fecha cambia, de modo que las multas por atraso correspondan al día en que llegó el dinero (sección 5.4, regla 5).
 3. Se muestra el total pendiente, lo ya abonado y lo que queda por cobrar.
 4. El sistema verifica que no exista ya un pago para ese accionista y temporada.
 5. Al confirmar se crea el registro en `pagos` y el accionista deja de figurar como deudor — salvo que le quede algún cargo impago, que lo reabre.
@@ -356,6 +371,8 @@ El total no cambia según el orden, pero la **fecha** sí importa para las multa
 Cuando la administración empezó a usar el sistema, muchos accionistas ya arrastraban deuda. Esa deuda **se transcribe, no se reconstruye**: se ingresa la cifra que tiene la administración en sus registros, y no se recalcula nunca. La cifra *es* el hecho.
 
 Se ingresa en líneas, cada una con su concepto, su tipo (`CUOTA`, `OTRO` o `MULTA`) y su monto. Se puede cargar a mano en la ficha del accionista o importarla desde Excel.
+
+Cada línea puede además indicar **cuántas temporadas cubre** (`temporadas_adeudadas`), porque una sola cifra suele juntar varios años de cuotas impagas. Es un dato **referencial**: acompaña al monto, no lo genera, y ninguna fórmula lo lee. Se acepta a mano, en la plantilla (columna «N° Temporadas») y en cualquier planilla cuya cabecera diga «Temporadas», «N° Temporadas», «Temporadas adeudadas» o similar. En el layout de una columna por tipo, el número de la fila se copia a todas las líneas que esa fila genera: si alguien debe tres temporadas, debe tres temporadas de cuota y tres de multa. Un valor que no sea un entero mayor que cero se guarda como `NULL` en vez de aproximarse — un contador equivocado es peor que uno ausente.
 
 **No es un cargo**, aunque los cargos sean la vía normal para cobrar algo distinto de la cuota. Un cargo se define por una tarifa y su monto por persona se recalcula desde ella, así que un cargo no puede llevar una cifra distinta para cada accionista. Un saldo inicial no es un cobro nuevo: es el punto de partida.
 

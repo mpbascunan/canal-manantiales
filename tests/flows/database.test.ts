@@ -14,7 +14,7 @@ describe('base de datos y superficie IPC', () => {
 
     // Same number as LATEST_VERSION in src/main/db/connection.ts — a new database
     // is created from SCHEMA, which already describes the final shape.
-    assert.equal(version, 17)
+    assert.equal(version, 18)
   })
 
   it('creates every table the handlers query', () => {

@@ -118,18 +118,21 @@ export function buildPlantillaDeudaInicial(): XLSX.WorkBook {
   const wb = XLSX.utils.book_new()
 
   XLSX.utils.book_append_sheet(wb, sheet([
-    ['N° Socio', 'Accionista', 'Concepto', 'Cuota', 'Otro', 'Multa'],
-    ['1', 'JUAN PÉREZ SOTO', 'Deuda temporada 2023-2024', 480000, 0, 240000],
-    ['3', 'ANA DÍAZ ROJAS', 'Multa temporada 2024-2025', 0, 0, 120000],
-    ['5', 'PEDRO MUÑOZ LARA', 'Aporte obras 2024', 0, 95000, 0],
+    ['N° Socio', 'Accionista', 'Concepto', 'N° Temporadas', 'Cuota', 'Otro', 'Multa'],
+    ['1', 'JUAN PÉREZ SOTO', 'Deuda temporadas 2021-2024', 3, 480000, 0, 240000],
+    ['3', 'ANA DÍAZ ROJAS', 'Multa temporada 2024-2025', 1, 0, 0, 120000],
+    ['5', 'PEDRO MUÑOZ LARA', 'Aporte obras 2024', '', 0, 95000, 0],
     [],
     ['Deje en 0 o en blanco lo que no corresponda: solo se importan los montos mayores a 0.'],
     ['«Otro» es cualquier cobro que no sea la cuota de la temporada ni una multa'],
     ['(un aporte a obras, un convenio). Se cobra después de la cuota y antes de la multa.'],
+    ['El N° Temporadas es opcional: indica cuántas temporadas cubre el monto de la fila,'],
+    ['para cuando una sola cifra junta varios años. Es solo referencial y no cambia el cálculo;'],
+    ['déjelo en blanco si no consta en los registros.'],
     ['El N° Socio es la forma segura de identificar al accionista; el nombre es el respaldo.'],
     ['Al importar se reemplaza la deuda anterior de cada accionista que aparezca en la planilla.'],
     ['Estos montos se registran tal cual, el sistema no los recalcula.']
-  ], [10, 34, 34, 14, 14, 14]), 'Deuda anterior')
+  ], [10, 34, 34, 15, 14, 14, 14]), 'Deuda anterior')
 
   return wb
 }

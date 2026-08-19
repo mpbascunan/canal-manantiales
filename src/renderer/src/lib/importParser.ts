@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx'
 import type { AccionistaType, TipoDeudaInicial } from '../../../shared/types'
+import { normalizarTemporadasAdeudadas } from '../../../shared/deuda'
 import { DEUDA_TIPO_CONCEPTO } from './labels'
 
 /**
@@ -77,6 +78,8 @@ export interface RawDeudaInicial {
   concepto: string
   tipo: TipoDeudaInicial
   monto: number
+  /** How many seasons the row says the debt covers; `null` when the sheet is silent. */
+  temporadas_adeudadas: number | null
   /** 1-based row in the sheet, so the preview can point at what it could not read. */
   fila: number
 }
@@ -106,6 +109,7 @@ function toNum(v: any): number {
 function cleanName(v: any): string {
   return String(v ?? '').trim().replace(/\s+/g, ' ')
 }
+
 
 /** A run this long of blank rows ends a sheet. */
 const BLANK_ROW_RUN = 50
@@ -366,13 +370,28 @@ export function parsePagos(buffer: ArrayBuffer): PagosParseResult {
  * going to keep the column order stable. Anything unreadable is skipped here and
  * reported by the preview, never guessed at.
  */
+/**
+ * True for a header that announces a *count of seasons*, not a concepto that
+ * happens to mention them.
+ *
+ * The distinction matters because the concepto column is free text and is often
+ * titled something like "Deuda temporadas anteriores": read as a count it would
+ * shadow the real column and contribute nothing but nulls. So the header has to
+ * be the count and little else — optionally prefixed by N°/cantidad, optionally
+ * qualified as adeudadas/impagas.
+ */
+function esColumnaTemporadas(v: string): boolean {
+  return /^(n[°ºo.]?|nro\.?|num\.?|cant\.?|cantidad)?\s*(de\s+)?temporadas?(\s+(adeudadas?|impagas?|pendientes?|atrasadas?|debidas?))?$/
+    .test(v)
+}
+
 export function parseDeudaInicial(buffer: ArrayBuffer): RawDeudaInicial[] {
   const wb = XLSX.read(buffer, { type: 'array', cellDates: false })
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
 
   let colSocio = -1, colNombre = -1, colConcepto = -1, colTipo = -1
-  let colMonto = -1, colMulta = -1, colCuota = -1, colOtro = -1
+  let colMonto = -1, colMulta = -1, colCuota = -1, colOtro = -1, colTemporadas = -1
   let headerRow = -1
 
   for (let i = 0; i < rows.length; i++) {
@@ -390,6 +409,7 @@ export function parseDeudaInicial(buffer: ArrayBuffer): RawDeudaInicial[] {
     colOtro     = h.findIndex(v => /^otros?\b/.test(v))
     colMonto    = h.findIndex(v =>
       /^(monto|total|deuda|saldo)/.test(v) && !/multa|cuota|otros?/.test(v))
+    colTemporadas = h.findIndex(esColumnaTemporadas)
     headerRow   = i
     break
   }
@@ -407,6 +427,12 @@ export function parseDeudaInicial(buffer: ArrayBuffer): RawDeudaInicial[] {
     const socio = colSocio === -1 ? null : String(row[colSocio] ?? '').trim() || null
     const conceptoCell = colConcepto === -1 ? '' : cleanName(row[colConcepto])
     const fila = i + 1
+    // A row's season count describes the row, so every line it produces carries
+    // it: a person four seasons behind owes four seasons of cuota *and* of multa,
+    // and the sheet states the span once for both. Purely descriptive either way
+    // — nothing prices a line off it (D14).
+    const temporadas =
+      colTemporadas === -1 ? null : normalizarTemporadasAdeudadas(row[colTemporadas])
 
     const push = (tipo: TipoDeudaInicial, monto: number, fallback: string): void => {
       if (monto <= 0) return
@@ -416,6 +442,7 @@ export function parseDeudaInicial(buffer: ArrayBuffer): RawDeudaInicial[] {
         concepto: conceptoCell || fallback,
         tipo,
         monto: Math.round(monto),
+        temporadas_adeudadas: temporadas,
         fila
       })
     }

@@ -57,6 +57,7 @@ export default function PagosPorMes() {
   const [temporadaId, setTemporadaId] = useState(0)
   const [pagos, setPagos] = useState<Pago[]>([])
   const [abonos, setAbonos] = useState<Abono[]>([])
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     api.temporadas.list().then((ts: Temporada[]) => {
@@ -97,11 +98,25 @@ export default function PagosPorMes() {
     return merged
   }, [pagos, abonos])
 
+  const filtradas = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return filas
+    return filas.filter(r =>
+      r.accionista_nombre.toLowerCase().includes(q) ||
+      String(r.numero_ingreso).includes(q)
+    )
+  }, [filas, search])
+
+  // Totals follow what the table shows, so the TOTALES row always adds up the
+  // visible movimientos rather than the whole period.
   const totals = useMemo(() => ({
-    monto_acciones: filas.reduce((s, r) => s + r.monto_acciones, 0),
-    multas:         filas.reduce((s, r) => s + r.multas, 0),
-    total:          filas.reduce((s, r) => s + r.total, 0)
-  }), [filas])
+    monto_acciones: filtradas.reduce((s, r) => s + r.monto_acciones, 0),
+    multas:         filtradas.reduce((s, r) => s + r.multas, 0),
+    total:          filtradas.reduce((s, r) => s + r.total, 0)
+  }), [filtradas])
+
+  const countPagos = filtradas.filter(r => r.kind === 'pago').length
+  const countAbonos = filtradas.filter(r => r.kind === 'abono').length
 
   const months = Array.from({ length: 12 }, (_, i) => i + 1)
   const porTemporada = ambito === 'temporada'
@@ -177,9 +192,16 @@ export default function PagosPorMes() {
           </>
         )}
 
+        <input
+          className="input max-w-xs"
+          placeholder="Buscar por accionista o N° ingreso..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+
         <span className="text-sm text-gray-500">
-          {pagos.length} pago{pagos.length !== 1 ? 's' : ''}
-          {abonos.length > 0 && <>, {abonos.length} abono{abonos.length !== 1 ? 's' : ''}</>}
+          {countPagos} pago{countPagos !== 1 ? 's' : ''}
+          {countAbonos > 0 && <>, {countAbonos} abono{countAbonos !== 1 ? 's' : ''}</>}
         </span>
       </div>
 
@@ -197,7 +219,7 @@ export default function PagosPorMes() {
             </tr>
           </thead>
           <tbody>
-            {filas.map(r => (
+            {filtradas.map(r => (
               <tr key={r._key} className={`table-row ${r.kind === 'abono' ? 'bg-amber-50/40' : ''}`}>
                 <td className="px-3 py-2 text-gray-500">{formatFecha(r.fecha)}</td>
                 <td className="px-3 py-2">{r.numero_ingreso}</td>
@@ -217,13 +239,15 @@ export default function PagosPorMes() {
                 <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatCLP(r.total)}</td>
               </tr>
             ))}
-            {filas.length === 0 && (
+            {filtradas.length === 0 && (
               <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">
-                {porTemporada ? 'Sin movimientos en esta temporada' : 'Sin movimientos en este mes'}
+                {search.trim()
+                  ? 'Sin movimientos que coincidan con la búsqueda'
+                  : porTemporada ? 'Sin movimientos en esta temporada' : 'Sin movimientos en este mes'}
               </td></tr>
             )}
           </tbody>
-          {filas.length > 0 && (
+          {filtradas.length > 0 && (
             <tfoot>
               <tr className="bg-gray-50 font-bold text-gray-800 border-t-2 border-gray-200">
                 <td className="px-3 py-2" colSpan={4}>TOTALES</td>

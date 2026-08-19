@@ -206,5 +206,41 @@ describe('importación de deuda inicial', () => {
 
       assert.equal(query('SELECT id FROM deuda_inicial').length, 0)
     })
+
+    it('carries the n° of temporadas the sheet declared', async () => {
+      const juan = await seedJuan()
+      await invoke('import:deuda-inicial', [fila({ temporadas_adeudadas: 3 })])
+
+      const [linea] = await invoke<DeudaInicial[]>('deuda-inicial:list-by-accionista', juan.id)
+      assert.equal(linea.temporadas_adeudadas, 3)
+      // Still transcribed, not derived: the count does not touch the figure.
+      assert.equal(linea.monto, 240_000)
+    })
+
+    it('stores null when the sheet had no temporadas column', async () => {
+      const juan = await seedJuan()
+      await invoke('import:deuda-inicial', [fila()])
+
+      const [linea] = await invoke<DeudaInicial[]>('deuda-inicial:list-by-accionista', juan.id)
+      assert.equal(linea.temporadas_adeudadas, null)
+    })
+
+    it('discards a count the sheet got wrong rather than storing a wrong one', async () => {
+      const juan = await seedJuan()
+      await invoke('import:deuda-inicial', [fila({ temporadas_adeudadas: 0 })])
+
+      const [linea] = await invoke<DeudaInicial[]>('deuda-inicial:list-by-accionista', juan.id)
+      assert.equal(linea.temporadas_adeudadas, null)
+    })
+  })
+
+  it('shows the count in the preview, before anything is written', async () => {
+    await seedJuan()
+    const preview = await invoke<DeudaInicialPreview>('import:preview-deuda-inicial', [
+      fila({ temporadas_adeudadas: 4 })
+    ])
+
+    assert.equal(preview.new_lineas[0].temporadas_adeudadas, 4)
+    assert.equal(query('SELECT id FROM deuda_inicial').length, 0)
   })
 })

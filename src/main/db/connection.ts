@@ -7,7 +7,7 @@ let db: Database.Database
 
 // Must match the highest version handled in runMigrations(). A database created
 // from SCHEMA below is already at this version and must skip all migrations.
-const LATEST_VERSION = 17
+const LATEST_VERSION = 18
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS temporadas (
@@ -95,6 +95,10 @@ CREATE INDEX IF NOT EXISTS idx_abonos_temporada  ON abonos(temporada_id);
 -- old season at today's cuota. Migration v16 dropped it: debt from before the
 -- app is transcribed as deuda_inicial (D14), debt after it is derived from real
 -- temporadas rows at their own rates (D13, D19), and nothing was left to count.
+--
+-- deuda_inicial has a temporadas_adeudadas of its own (v18). It is not this
+-- column coming back: it annotates a transcribed figure instead of generating
+-- one, and no formula reads it.
 CREATE TABLE IF NOT EXISTS cargos (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   nombre       TEXT    NOT NULL,
@@ -132,6 +136,17 @@ CREATE TABLE IF NOT EXISTS deuda_inicial (
   -- the same position a cargo holds inside a temporada.
   tipo          TEXT    NOT NULL CHECK(tipo IN ('CUOTA','MULTA','OTRO')),
   monto         REAL    NOT NULL DEFAULT 0,
+  -- How many seasons this line covers, when the administration's records say so:
+  -- a single CUOTA line is often three or four years of unpaid cuotas rolled into
+  -- one figure, and the count is the only place that fact can live.
+  --
+  -- Descriptive only, and NOT the deudores_config column of the same name that
+  -- migration v16 dropped. That one was multiplied by the *active* season's cuota
+  -- to invent an amount (the mispricing D13 exists to prevent); here the monto is
+  -- transcribed and authoritative, so nothing derives money from this — it is
+  -- displayed next to the figure it describes and never enters a formula.
+  -- NULL when unknown, which is every row predating this column.
+  temporadas_adeudadas INTEGER,
   notas         TEXT,
   created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -554,6 +569,26 @@ function runMigrations(database: Database.Database, version: number): void {
     // applied rather than here. This block only records that the database has
     // been through it.
     database.pragma('user_version = 17')
+  }
+
+  if (version < 18) {
+    // v18: deuda_inicial.temporadas_adeudadas — how many seasons a transcribed
+    // line covers. Existing rows keep NULL: the count was never recorded, and
+    // guessing one from the monto would mean dividing by a cuota the app never
+    // saw. Nothing computes from the column, so NULL costs nothing.
+    //
+    // Plain ADD COLUMN, no rebuild: unlike v15's tipo there is no CHECK to
+    // introduce, because a nonsensical count is normalised to NULL by the
+    // handlers instead. A CHECK declared in SCHEMA would reach new databases
+    // only — CREATE TABLE IF NOT EXISTS is a no-op against the client's — and
+    // that is exactly the silent divergence between old and new installs the
+    // single-schema rule exists to avoid.
+    database.transaction(() => {
+      if (!hasColumn(database, 'deuda_inicial', 'temporadas_adeudadas')) {
+        database.prepare('ALTER TABLE deuda_inicial ADD COLUMN temporadas_adeudadas INTEGER').run()
+      }
+    })()
+    database.pragma('user_version = 18')
   }
 }
 

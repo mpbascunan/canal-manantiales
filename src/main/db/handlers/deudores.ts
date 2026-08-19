@@ -110,8 +110,14 @@ export function registerDeudorHandlers(): void {
    * Assembles the rows and hands them to the shared engine rather than
    * expressing the rules in SQL again (context.md G6).
    *
-   * `hoy` is a parameter so the caller can reproduce a past state; it defaults
-   * to today.
+   * `hoy` is a parameter so the caller can price the debt at a date other than
+   * the clock's; it defaults to today. The pago form passes the fecha typed on
+   * the receipt, which is what keeps a payment transcribed late from being fined
+   * for the delay (D6 rule 5).
+   *
+   * It gates only whether each temporada's `fecha_multa` has matured. Abonos are
+   * all counted whatever their date, so this reproduces "the debt as of `hoy`,
+   * knowing everything paid since" — not a full historical snapshot.
    */
   ipcMain.handle('deudores:get-deuda', (_e, accionistaId: number, hoy?: string) => {
     return computeDeuda(accionistaId, hoy ?? today())

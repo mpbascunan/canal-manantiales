@@ -146,4 +146,46 @@ describe('deudores', () => {
     // Abonos pay the cuota first (D3), so the cargos and the multa are untouched.
     assert.equal(deuda.total_pendiente, 53_000)      // 35.000 + 16.000 + 2.000
   })
+
+  /**
+   * The pago form passes its own `fecha` as `hoy`, so a receipt transcribed
+   * late is priced as of the day the money arrived (D6 rule 5). Without this,
+   * a payment made inside the plazo but typed up afterwards was fined for the
+   * administration's delay.
+   */
+  describe('multa por atraso at a date other than today', () => {
+    const PLAZO = '2024-07-15'
+
+    beforeEach(async () => {
+      temporada = await invoke<Temporada>('temporadas:update', {
+        ...temporada, fecha_multa: PLAZO, monto_multa_por_accion: 500
+      })
+    })
+
+    const multaAl = async (hoy: string) =>
+      (await invoke<DeudaPorTemporada>('deudores:get-deuda', accionista.id, hoy)).total_multas
+
+    it('waives it for a date on or before the deadline', async () => {
+      assert.equal(await multaAl('2024-07-01'), 0)
+      assert.equal(await multaAl(PLAZO), 0, 'the deadline day itself is still on time')
+    })
+
+    it('charges it for a date after the deadline', async () => {
+      assert.equal(await multaAl('2024-07-16'), 2_000)   // 100% pendiente × 4 unidades × 500
+      assert.equal(await multaAl(HOY), 2_000)
+    })
+
+    it('still charges an older temporada whose deadline the date is past', async () => {
+      const vieja = await seedTemporada({
+        nombre: 'Temporada 2022-2023', activa: false,
+        fecha_inicio: '2022-05-01', fecha_fin: '2023-04-30', valor_accion: 8_000
+      })
+      await invoke('temporadas:update', {
+        ...vieja, fecha_multa: '2022-12-01', monto_multa_por_accion: 400
+      })
+
+      // On time for the current temporada, years late for the old one.
+      assert.equal(await multaAl('2024-07-01'), 1_600)   // 4 unidades × 400, only the old one
+    })
+  })
 })

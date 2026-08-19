@@ -95,6 +95,89 @@ describe('parseDeudaInicial', () => {
     })
   })
 
+  describe('n° de temporadas adeudadas', () => {
+    it('reads the count and gives it to every line of the row', () => {
+      // One row, three seasons, two lines: the span covers both the cuota and
+      // the multa, because the sheet states it once for the whole row.
+      const rows = parseDeudaInicial(sheet([
+        ['Accionista', 'N° Temporadas', 'Cuota', 'Multa'],
+        ['Juan Pérez', 3, 480000, 240000]
+      ]))
+
+      assert.deepEqual(rows.map(r => r.temporadas_adeudadas), [3, 3])
+    })
+
+    it('is null when the sheet has no such column', () => {
+      const rows = parseDeudaInicial(sheet([
+        ['Accionista', 'Multa'],
+        ['Juan Pérez', 240000]
+      ]))
+
+      assert.equal(rows[0].temporadas_adeudadas, null)
+    })
+
+    it('accepts the spellings the administration is likely to type', () => {
+      for (const header of [
+        'Temporadas', 'temporadas adeudadas', 'N° Temporadas', 'Nº de temporadas',
+        'Cantidad de Temporadas', 'Temporadas impagas', 'Temporadas pendientes'
+      ]) {
+        const rows = parseDeudaInicial(sheet([
+          ['Accionista', header, 'Multa'],
+          ['Juan Pérez', 2, 240000]
+        ]))
+
+        assert.equal(rows[0].temporadas_adeudadas, 2, `"${header}" should be read as the count`)
+      }
+    })
+
+    it('ignores a concepto column that merely mentions temporadas', () => {
+      // The trap this guards: read as the count, a free-text concepto column
+      // would shadow the real one and yield nothing but nulls.
+      const rows = parseDeudaInicial(sheet([
+        ['Accionista', 'Deuda temporadas anteriores', 'Multa'],
+        ['Juan Pérez', 'cuotas 2022 y 2023', 240000]
+      ]))
+
+      assert.equal(rows[0].temporadas_adeudadas, null)
+    })
+
+    it('discards a count that is not a whole number of seasons', () => {
+      for (const cell of [0, -1, 2.5, 'cuatro', '', null]) {
+        const rows = parseDeudaInicial(sheet([
+          ['Accionista', 'Temporadas', 'Multa'],
+          ['Juan Pérez', cell, 240000]
+        ]))
+
+        assert.equal(
+          rows[0].temporadas_adeudadas, null,
+          `${JSON.stringify(cell)} should not be read as a count`
+        )
+      }
+    })
+
+    it('works in the single-monto layout too', () => {
+      const rows = parseDeudaInicial(sheet([
+        ['Accionista', 'Tipo', 'Temporadas', 'Monto'],
+        ['Juan Pérez', 'CUOTA', 4, 640000]
+      ]))
+
+      assert.equal(rows.length, 1)
+      assert.equal(rows[0].tipo, 'CUOTA')
+      assert.equal(rows[0].monto, 640000)
+      assert.equal(rows[0].temporadas_adeudadas, 4)
+    })
+
+    it('does not let the count be mistaken for the monto', () => {
+      const rows = parseDeudaInicial(sheet([
+        ['Accionista', 'Temporadas', 'Monto'],
+        ['Juan Pérez', 3, 480000]
+      ]))
+
+      assert.equal(rows.length, 1)
+      assert.equal(rows[0].monto, 480000)
+    })
+  })
+
   describe('robustness', () => {
     it('finds the header even when preceded by title rows', () => {
       const rows = parseDeudaInicial(sheet([

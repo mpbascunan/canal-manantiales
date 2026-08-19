@@ -88,7 +88,7 @@ describe('migraciones sobre una base con datos', () => {
 
   it('brings a v14 database up to the latest version', () => {
     const version = getDb().pragma('user_version', { simple: true }) as number
-    assert.equal(version, 17)
+    assert.equal(version, 18)
   })
 
   it('backs the database up before touching it', () => {
@@ -109,6 +109,28 @@ describe('migraciones sobre una base con datos', () => {
     // the record of where the figure came from.
     assert.equal(linea.notas, 'transcrita')
     assert.equal(linea.created_at, '2025-01-02 10:00:00')
+  })
+
+  it('adds temporadas_adeudadas, leaving transcribed rows unannotated (v18)', () => {
+    // The count was never in the v14 records, and it cannot be reconstructed: it
+    // would take dividing the monto by a cuota this database never stored.
+    const linea = getDb()
+      .prepare('SELECT temporadas_adeudadas FROM deuda_inicial WHERE id = 5')
+      .get() as { temporadas_adeudadas: number | null }
+
+    assert.equal(linea.temporadas_adeudadas, null)
+  })
+
+  it('accepts a count on the migrated table', () => {
+    getDb().prepare(
+      `INSERT INTO deuda_inicial (accionista_id, concepto, tipo, monto, temporadas_adeudadas)
+       VALUES (1, 'Cuotas 2019-2023', 'CUOTA', 700000, 4)`
+    ).run()
+
+    const { temporadas_adeudadas } = getDb()
+      .prepare("SELECT temporadas_adeudadas FROM deuda_inicial WHERE concepto = 'Cuotas 2019-2023'")
+      .get() as { temporadas_adeudadas: number }
+    assert.equal(temporadas_adeudadas, 4)
   })
 
   it('accepts OTRO afterwards, which is the point of the rebuild', () => {
